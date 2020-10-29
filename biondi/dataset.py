@@ -971,14 +971,12 @@ def convert_anc_to_box(anc_params, boundingbox, cls_key='cls-c4', cls_mask_key='
 
 def per_sample_tile_normalization(sorted_tiles):
     images = []
-    print('Performing per-sample image tile normalization.')
     for i in range(len(sorted_tiles)):
         #print(i + 1, 'out of', len(sorted_tiles))
         sample = sorted_tiles[i]
         image = (sample - np.mean(sample)) / np.std(sample)
         images.append(image)
     images = np.array(images)
-    print('Normalization complete.')
     return images
 
 
