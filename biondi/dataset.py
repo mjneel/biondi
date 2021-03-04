@@ -1289,8 +1289,8 @@ def get_retinanet_training_dictionary_from_mosaic(wsi_tiles_filename, coords, bo
         coords,
         boundingbox,
         normalize=normalize,
-        bbox_size,
-        tile_size
+        bbox_size=bbox_size,
+        tile_size=tile_size,
     )
     boxes['dat'] = tiles
     for key in boxes.keys():
