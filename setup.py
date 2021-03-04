@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name='biondi',
-    version='0.1',
+    version='0.1.1',
     author='Michael Neel',
     author_email='neelm@uci.edu',
     description='Machine learning code and resources for analyzing choroid plexus pathology',

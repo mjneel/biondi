@@ -6,6 +6,7 @@ from skimage import io
 import skimage
 import skimage.morphology
 import skimage.filters
+import skimage.transform
 import scipy
 from scipy import ndimage
 import openslide
@@ -606,6 +607,7 @@ def half_tile_resolution(im_size):
     model = keras.Model(inputs=inputs, outputs=out)
     return model
 
+
 def generate_mosaic_template(filename):
     x = np.ones((10249, 10249, 3), dtype=np.uint8)
     x[:, :, :] = 255
@@ -864,7 +866,7 @@ def annotation_tool(name, filename, x):
     return d
 
 
-def WSI_cell_extraction_from_tiles(wsi_tiles_filename, im_size, coords, save_filename):
+def wsi_cell_extraction_from_tiles(wsi_tiles_filename, im_size, coords, save_filename):
     tiles = np.load(wsi_tiles_filename)
     cells = []
     counter = 0
@@ -955,25 +957,34 @@ def convert_anc_to_box(anc_params, boundingbox, cls_key='cls-c4', cls_mask_key='
         reg.append(box[reg_key])
         reg_mask.append(box[reg_mask_key])
     cls = np.array(cls)
-    cls.shape = (len(cls), boundingbox.params['anchor_gsizes'][0][0], boundingbox.params['anchor_gsizes'][0][0],
+    cls.shape = (len(cls),
+                 boundingbox.params['anchor_gsizes'][0][0],
+                 boundingbox.params['anchor_gsizes'][0][0],
                  boundingbox.params['classes'])
     cls_mask = np.array(cls_mask)
-    cls_mask.shape = (
-    len(cls_mask), boundingbox.params['anchor_gsizes'][0][0], boundingbox.params['anchor_gsizes'][0][0],
-    boundingbox.params['classes'])
+    cls_mask.shape = (len(cls_mask),
+                      boundingbox.params['anchor_gsizes'][0][0],
+                      boundingbox.params['anchor_gsizes'][0][0],
+                      boundingbox.params['classes'])
     reg = np.array(reg)
-    reg.shape = (len(reg), boundingbox.params['anchor_gsizes'][0][0], boundingbox.params['anchor_gsizes'][0][0], 4)
+    reg.shape = (len(reg),
+                 boundingbox.params['anchor_gsizes'][0][0],
+                 boundingbox.params['anchor_gsizes'][0][0],
+                 4)
     reg_mask = np.array(reg_mask)
-    reg_mask.shape = (
-    len(reg_mask), boundingbox.params['anchor_gsizes'][0][0], boundingbox.params['anchor_gsizes'][0][0], 4)
+    reg_mask.shape = (len(reg_mask),
+                      boundingbox.params['anchor_gsizes'][0][0],
+                      boundingbox.params['anchor_gsizes'][0][0],
+                      4)
     return cls, reg, cls_mask, reg_mask
 
 
 def per_sample_tile_normalization(sorted_tiles):
     images = []
     for i in range(len(sorted_tiles)):
-        #print(i + 1, 'out of', len(sorted_tiles))
+        # print(i + 1, 'out of', len(sorted_tiles))
         sample = sorted_tiles[i]
+        # TODO: consider normalizing channels individually
         image = (sample - np.mean(sample)) / np.std(sample)
         images.append(image)
     images = np.array(images)
@@ -1006,6 +1017,7 @@ def normalized_tiles_and_bbox_params_from_wsi_tiles(wsi_tiles_filename, coords, 
 
 
 def anc_params_from_mosaics(mosaic_metadata, coords, bbox_size=64, tile_size=1024):
+    # TODO: check if this function is used and implement use of tile_size
     anc_params = []
     for i in range(len(mosaic_metadata)):
         tile_bbox_param = []
@@ -1164,7 +1176,8 @@ def get_wsi_coords_of_cells_from_tiles(i, coords, wsi_tiles_filename, tile_size)
     r_start = tile_size * row
     wsi_coords = []
     for j in coords:
-        # TODO: revision comment: looks like code is treating coords as yx instead of xy, could be breaking other code that uses this
+        # TODO: revision comment: looks like code is treating coords as yx instead of xy,
+        #  could be breaking other code that uses this
         # TODO: need to correct this and other code to use xy coords
         wsi_coords.append([r_start + j[0], c_start + j[1]])
     if len(wsi_coords) == 0:
@@ -1238,6 +1251,19 @@ def local_to_global_coords_retinanet(local_coords, wsi_tiles_filename, tile_size
 
 
 def convert_mosaic_coords_to_wsi(coords, metadata, wsi_tiles_filename, tile_size=1024):
+    """
+
+    :param coords:
+    :type coords:
+    :param metadata:
+    :type metadata: array
+    :param wsi_tiles_filename:
+    :type wsi_tiles_filename:
+    :param tile_size:
+    :type tile_size:
+    :return:
+    :rtype:
+    """
     num_of_columns = int(re.search('rows_(.+?)columns.npy', wsi_tiles_filename).group(1))
     # coords must be in xy format
     grid_coords = coords // 1025
@@ -1262,7 +1288,7 @@ def get_retinanet_training_dictionary_from_mosaic(wsi_tiles_filename, coords, bo
         wsi_tiles_filename,
         coords,
         boundingbox,
-        normalize,
+        normalize=normalize,
         bbox_size,
         tile_size
     )
@@ -1323,6 +1349,7 @@ def retinanet_generator(data, batchsize=1, normalize=True):
 
 
 def retinanet_prediction_generator(images, boundingbox):
+    # TODO: Not sure what this is for or when it was used. Consider deleting or making it an actual generator.
     pred_dic = {'dat': per_sample_tile_normalization(np.expand_dims(images, axis=1))}
     for key in boundingbox.params['inputs_shapes'].keys():
         if 'msk' in key:
@@ -1336,13 +1363,11 @@ def retinanet_validation_generator(validation_dict):
     return val_dict
 
 
-
 def retinanet_prediction(images, model, boundingbox):
     # want to add path boolean and code load model if model is a filepath
     output = model.predict(retinanet_prediction_generator(images, boundingbox))
     output_dic = {name: pred for name, pred in zip(model.output_names, output)}
     return output_dic
-
 
 
 def cpec_coords_from_anc(anc, wsi_tiles_filename, tile_size, half_res=False):
@@ -1367,10 +1392,15 @@ def cpec_coords_from_anc(anc, wsi_tiles_filename, tile_size, half_res=False):
         return
 
 
-def tile_sample_hdf5_generator(tile_stack_filename, sample_size=100):
+def tile_sample_hdf5_generator(tile_stack_filename, sample_size=100, name=None):
+    # TODO: modify to allow re functions to work when not within the file folder or when providing a full file path
+    # TODO: add naming override functionality
     num_of_columns = int(re.search('rows_(.+?)columns.npy', tile_stack_filename).group(1))
     num_of_rows = int(re.search('_(.{1,4}?)rows', tile_stack_filename).group(1))
-    wsi_name = re.search('(^.{5,13}?)_', tile_stack_filename).group(1)
+    if name:
+        wsi_name = name
+    else:
+        wsi_name = re.search('(^.{5,13}?)_', tile_stack_filename).group(1)
     filename = wsi_name + '_tile_sample_'
     previous_metadata = glob.glob(filename + '*.hdf5')
     max_previous = max([int(re.search('sample_(.{1,2}?).hdf5', i).group(1)) for i in previous_metadata]+[0])
@@ -1396,6 +1426,243 @@ def tile_sample_hdf5_generator(tile_stack_filename, sample_size=100):
     return
 
 
+def unet_generator(imgs, masks):
+    i = 0
+    names = list(imgs.keys())
+    while True:
+        if i == len(names):
+            i = 0
+            p = np.random.permutation(len(names))
+            names = names[p]
+        img = per_sample_tile_normalization(np.expand_dims(imgs[names[i]][:], axis=0))
+        msk = np.expand_dims(masks[names[i]][:], axis=0)
+        i += 1
+        yield img, msk
 
 
+def sliding_window_generator(img, batchsize=16, window_size=64):
+    # img should be a 4D array
+    # window_size must be even
+    windows = skimage.util.view_as_windows(np.pad(img,
+                                                  ((int(window_size/2), int(window_size/2)-1),
+                                                   (int(window_size/2), int(window_size/2)-1),
+                                                   (int(window_size/2), int(window_size/2)-1),
+                                                   (0, 0)),
+                                                  'constant',
+                                                  constant_values=0),
+                                           (window_size,window_size,window_size,3),
+                                           step=1)
+    counter = 0
+    im_batch = []
+    for i in range(windows.shape[0]):
+        for j in range(windows.shape[1]):
+            for k in range(windows.shape[2]):
+                # should I replace 0, in slice with :?
+                im_batch.append(windows[i, j, k, 0, ...])
+                counter += 1
+                if counter == batchsize:
+                    yield np.stack(im_batch)
+                    counter = 0
+                    im_batch=[]
 
+
+def count_num_objs(msk, threshold, display_im=True):
+    import copy
+    labeled_msk = skimage.measure.label(msk, return_num=True, connectivity=3)
+    #print('Before cleanup:', labeled_msk[1], 'objects')
+    obj_vol = np.unique(labeled_msk[0], return_counts=True)
+    # Number of object at each found voxel size
+    vol_prevalence = np.unique(obj_vol[1], return_counts=True)
+    obj_to_drop = obj_vol[0][obj_vol[1]<threshold]
+    #print('After cleanup:', labeled_msk[1] - len(obj_to_drop), 'objects')
+    msk2 = copy.deepcopy(labeled_msk[0])
+    for label in obj_to_drop:
+        msk2[msk2==label] = 0
+    msk2[msk2>0] = 1
+    if display_im:
+        #before cleanup
+        print('Before cleanup:', labeled_msk[1], 'objects')
+        plt.imshow(np.max(msk, axis=0))
+        plt.show()
+        #after cleanup
+        print('After cleanup:', labeled_msk[1] - len(obj_to_drop), 'objects')
+        plt.imshow(np.max(msk2, axis=0))
+        plt.show()
+    return msk2
+
+
+def generate_3d_binary_mask(image_fn_list, channel_index=1, voxel_threshold=50, sigma=1, kernel=(5,7,7), save_tiff=False, save_npy=True, src_fldr=None, dst_fldr=None):
+    """
+    *** Requires dev version of scipy for background subtraction ***
+    Generates binary masked based on a single channel. Applies gaussian blurring followed by background subtraction
+    using the rolling ball algorithm (similar to imagej) and finally generates a binary image based on ostu
+    thresholding.
+    :param image:
+    :type image:
+    :param channel_index:
+    :type channel_index:
+    :param voxel_threshold:
+    :type voxel_threshold:
+    :return:
+    :rtype:
+    """
+    from skimage import filters, restoration
+    def check_input_number(image_fn):
+        while True:
+            try:
+                user_input = int(input(f'{image_fn} has more than 3 channels! Specify the desired channel index.'))
+            except ValueError:
+                print("Not an integer! Try again.")
+                continue
+            else:
+                return user_input
+                break
+
+    def create_mask(image_fn, src_fldr=src_fldr, channel_index=channel_index, voxel_threshold=voxel_threshold, sigma=sigma, kernel=kernel):
+        if src_fldr:
+            image = skimage.io.imread(src_fldr + image_fn)
+        else:
+            image = skimage.io.imread(image_fn)
+        if image.shape[-1] != 3:
+            blurred_image = filters.gaussian(image[..., check_input_number(image_fn)], sigma=sigma, preserve_range=True)
+        else:
+            blurred_image = filters.gaussian(image[..., channel_index], sigma=sigma, preserve_range=True)
+        background = restoration.rolling_ball(blurred_image, kernel=restoration.ellipsoid_kernel(kernel, 0.1))
+        bkgrd_sub = blurred_image-background
+        ostu_thresh = filters.threshold_otsu(bkgrd_sub)
+        binary_msk = bkgrd_sub>=ostu_thresh
+        cleanedup = count_num_objs(binary_msk, threshold=voxel_threshold, display_im=False)
+        return cleanedup
+
+    for image_fn in image_fn_list:
+        print(f'Working on {image_fn}', end=' ')
+        mask = create_mask(image_fn, channel_index=channel_index, voxel_threshold=voxel_threshold, sigma=sigma, kernel=kernel)
+        if save_npy:
+            if dst_fldr:
+                np.save(dst_fldr + image_fn[:-4] + '_mask.npy', mask)
+            else:
+                np.save(image_fn[:-4] + '_mask.npy', mask)
+        if save_tiff:
+            mask[mask==1] = 255
+            if dst_fldr:
+                skimage.io.imsave(dst_fldr + image_fn[:-4] + '_mask.tif', mask.astype('uint8'))
+            else:
+                skimage.io.imsave(image_fn[:-4] + '_mask.tif', mask.astype('uint8'))
+        print('\r', f'Finished {image_fn}')
+    print('Done!')
+    return
+
+
+def quarter_divider(image):
+    if image.ndim == 3:
+        image = np.expand_dims(image, axis=-1)
+    dim_length = image.shape[-2]
+    if dim_length % 2 == 0:
+        half_length = dim_length//2
+        new_im1 = image[:, :half_length, :half_length, :]
+        new_im2 = image[:, :half_length, half_length:, :]
+        new_im3 = image[:, half_length:, :half_length, :]
+        new_im4 = image[:, half_length:, half_length:, :]
+        return new_im1, new_im2, new_im3, new_im4
+    else:
+        print('Image can not be divided evenly!')
+        return None
+
+
+def batch_quarter_divider(batch_fn, dst_fldr=None, save_tif=False):
+    for fn in batch_fn:
+        f_name = os.path.basename(os.path.normpath(fn))
+        img_name, f_ext = os.path.splitext(f_name)
+        img_name_path, _ = os.path.splitext(fn)
+        if f_ext == '.npy':
+            images = quarter_divider(np.load(fn))
+        elif f_ext == '.tif':
+            images = quarter_divider(skimage.io.imread(fn))
+        else:
+            print(f'{img_name} is not a npy or tif file! Please provide either a npy or tif file.')
+            continue
+        for i in range(4):
+            if dst_fldr:
+                np.save(f'{dst_fldr}{img_name}_quarter{i+1}.npy', images[i])
+                if save_tif:
+                    skimage.io.imsave(f'{dst_fldr}{img_name}_quarter{i+1}.tif', images[i])
+            else:
+                np.save(f'{img_name_path}_quarter{i + 1}.npy', images[i])
+                if save_tif:
+                    skimage.io.imsave(f'{img_name_path}_quarter{i + 1}.tif', images[i])
+
+
+def generate_border(mask, bool_output=False):
+    """
+    Generates 3 pixel wide border region from binary mask
+    :param bool_output:
+    :type bool_output:
+    :param mask:
+    :type mask:
+    :return:
+    :rtype:
+    """
+    if bool_output:
+        border = skimage.morphology.binary_dilation(mask - skimage.morphology.binary_erosion(mask))
+    else:
+        border = skimage.morphology.binary_dilation(mask - skimage.morphology.binary_erosion(mask)).astype(mask.dtype)
+    return border
+
+
+def add_border_to_mask(mask):
+    border = generate_border(mask, bool_output=True)
+    new_mask = np.where(border, 2, mask)
+    return new_mask
+
+
+def np_data_generator(images, labels, batch_size=16):
+    i = 0
+    while True:
+        if i == (len(images)//batch_size):
+            i = 0
+            p = np.random.permutation(len(images))
+            images = images[p]
+            labels = labels[p]
+        start = i * batch_size
+        stop = start + batch_size
+        xbatch = per_sample_tile_normalization(images[start:stop])
+        ybatch = labels[start:stop]
+        i += 1
+        yield xbatch, ybatch
+
+
+def np_validation_generator(images, labels, batch_size=16):
+    i = 0
+    while True:
+        if i == (len(images) // batch_size):
+            i = 0
+        start = i * batch_size
+        stop = start + batch_size
+        xbatch = per_sample_tile_normalization(images[start:stop])
+        ybatch = labels[start:stop]
+        i += 1
+        yield xbatch, ybatch
+
+
+def np_prediction_generator(filename, batch_size=16):
+    im = np.load(filename)
+    if len(im)%batch_size == 0:
+        for i in range(len(im)//batch_size):
+            start = i * batch_size
+            stop = start + batch_size
+            xbatch = per_sample_tile_normalization(im[start:stop])
+            yield xbatch
+    else:
+        for i in range((len(im)//batch_size)+1):
+            start = i * batch_size
+            if i == (len(im)//batch_size):
+                xbatch = per_sample_tile_normalization(im[start:])
+                yield xbatch
+            else:
+                stop = start + batch_size
+                xbatch = per_sample_tile_normalization(im[start:stop])
+                yield xbatch
+
+
+def aggregate_retinanet_training_dictionaries(dicts):
+    aggregated_dictionary = {key: np.concatenate([dic[key] for dic in dicts], axis=0) for key in dicts[0].keys()}

@@ -5,7 +5,9 @@ import scipy.stats
 import sklearn
 from sklearn.neighbors import KDTree
 import matplotlib
+from mpl_toolkits.mplot3d import Axes3D
 import random
+import pandas as pd
 
 
 def agreement_table(a, b, c):
@@ -443,7 +445,22 @@ def get_unaffected_from_total_coords(total_cpec_coords, trimmed_affected_cpec_co
 #    print(len(del_total), len(del_affected))
 
 
-def percent_affected(total_cpec_coords, affected_cpec_coords, radius=310.559):
+def cpec_density(total_cpec_coords, radius=310.559):
+    """
+
+    :param total_cpec_coords:
+    :type total_cpec_coords:
+    :param radius:
+    :type radius:
+    :return:
+    :rtype:
+    """
+    tc = KDTree(total_cpec_coords)
+    total = tc.query_radius(total_cpec_coords, r=radius, count_only=True)
+    return
+
+
+def percent_affected(total_cpec_coords, affected_cpec_coords, density=False, radius=310.559):
     """
     Returns a list of percent affected values (within a given radius) for
     use in applying a heatmap to a scatterplot.
@@ -462,7 +479,10 @@ def percent_affected(total_cpec_coords, affected_cpec_coords, radius=310.559):
     for i in range(len(percentage_affected)):
         if percentage_affected[i] > 1:
             percentage_affected[i] = 1
-    return percentage_affected
+    if density:
+        return percentage_affected, total
+    else:
+        return percentage_affected
 
 
 def plot_xy_hist(total_cpec_coords, percentage_affected, xy_savefile,
@@ -582,10 +602,10 @@ def sort_affected_coords_from_aipredictions(aipredictions, coords):
     return affected_coords
 
 
-def kolmogorov_smirnov_statistic_for_WSI_montecarlo_simulations(obs_pa, simulated_pa, start=None, stop=None,
+def kolmogorov_smirnov_statistic_for_wsi_montecarlo_simulations(obs_pa, simulated_pa, start=None, stop=None,
                                                                 observed_only=False, test_observed=False):
-    sim_dValues = []
-    sim_pValues = []
+    sim_dvalues = []
+    sim_pvalues = []
     observed = np.load(obs_pa)
     obs_reshape = observed.copy()
     obs_reshape.shape = (1, observed.shape[0])
@@ -593,24 +613,24 @@ def kolmogorov_smirnov_statistic_for_WSI_montecarlo_simulations(obs_pa, simulate
     obs_and_sims = np.concatenate([obs_reshape, simulations]).flatten()
     counter = 0
     if test_observed:
-        obs_dValue, obs_pValue = scipy.stats.ks_2samp(observed, obs_and_sims)
-        print('Observed data D-value:', obs_dValue, 'Observed data P-value:', obs_pValue)
+        obs_dvalue, obs_pvalue = scipy.stats.ks_2samp(observed, obs_and_sims)
+        print('Observed data D-value:', obs_dvalue, 'Observed data P-value:', obs_pvalue)
         if observed_only:
-            return obs_dValue, obs_pValue
+            return obs_dvalue, obs_pvalue
     if not start:
         start = 0
     if not stop:
         stop = len(simulations)
     for i in range(start, stop):
         d, p = scipy.stats.ks_2samp(simulations[i], obs_and_sims)
-        sim_dValues.append(d)
-        sim_pValues.append(p)
+        sim_dvalues.append(d)
+        sim_pvalues.append(p)
         counter += 1
-        print(counter, 'D-value:', sim_dValues[counter - 1], 'P-value:', sim_pValues[counter - 1])
+        print(counter, 'D-value:', sim_dvalues[counter - 1], 'P-value:', sim_pvalues[counter - 1])
     if test_observed:
-        return obs_dValue, obs_pValue, sim_dValues, sim_pValues
+        return obs_dvalue, obs_pvalue, sim_dvalues, sim_pvalues
     else:
-        return sim_dValues, sim_pValues
+        return sim_dvalues, sim_pvalues
 
 
 def plot_training(history):
@@ -669,3 +689,88 @@ def retinanet_ious(validation_data_dict, model, boundingbox):
     ious['p75'].append(np.percentile(curr, 75))
 
     return {k: np.array(v) for k, v in ious.items()}
+
+
+def pca_analysis(data, n_comp=3, graph=True, pd_database=False):
+    # TODO: add capability to provide a numpy array for data
+    # assumes 0 index column is sample_name/Target
+    if pd_database:
+        df = data
+    else:
+        df = pd.read_excel(data)
+    morphologies = list(df.columns)[1:]
+    x = df.loc[:, morphologies].values
+    y = df.loc[:, [df.columns[0]]].values
+    pca = sklearn.decomposition.PCA(n_components=n_comp)
+    principalcomponents = pca.fit_transform(x)
+    component_names = [f'principal component {i+1}' for i in range(n_comp)]
+    principal_df = pd.DataFrame(data=principalcomponents, columns=component_names)
+    final_df = pd.concat([principal_df, df[[df.columns[0]]]], axis=1)
+    if graph:
+        targets = list(np.unique(df[df.columns[0]]))
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(1, 1, 1)
+        ax.set_xlabel('principal component 1', fontsize=15)
+        ax.set_ylabel('principal component 2', fontsize=15)
+        ax.set_title('2 component PCA', fontsize=20)
+        for target in targets:
+            indices_to_keep = final_df[df.columns[0]] == target
+            ax.scatter(final_df.loc[indices_to_keep, component_names[0]],
+                       final_df.loc[indices_to_keep, component_names[1]],
+                       s=50)
+        ax.legend(targets, bbox_to_anchor=(1, 1), loc='upper left', ncol=1)
+        ax.grid()
+        return final_df, fig
+    else:
+        return final_df
+
+
+def plot_pca(data, pc, _3d=False, elev=None, azim=None, labels=False, legend=True):
+    # data must be a pandas dataframe with principal components and targets
+    # pc is a tuple of which principal components to plot (1 index)
+    targets = list(np.unique(data['Target']))
+    fig = plt.figure(figsize=(8, 8))
+    if _3d:
+        ax = fig.add_subplot(1, 1, 1, projection='3d')
+        ax.set_xlabel(f'principal component {pc[0]}', fontsize=15)
+        ax.set_ylabel(f'principal component {pc[1]}', fontsize=15)
+        ax.set_zlabel(f'principal component {pc[2]}', fontsize=15)
+        ax.set_title('3 component PCA', fontsize=20)
+        for target in targets:
+            indices_to_keep = data['Target'] == target
+            ax.scatter(data.loc[indices_to_keep, f'principal component {pc[0]}'],
+                       data.loc[indices_to_keep, f'principal component {pc[1]}'],
+                       data.loc[indices_to_keep, f'principal component {pc[2]}'],
+                       s=50)
+            if labels:
+                label = str(data.loc[indices_to_keep, ['Target']].values[0][0])
+                ax.annotate(label, (data.loc[indices_to_keep, f'principal component {pc[0]}'],
+                                    data.loc[indices_to_keep, f'principal component {pc[1]}']),
+                            textcoords='offset points',
+                            xytext=(0, 10),
+                            ha='center')
+        if legend:
+            ax.legend(targets, bbox_to_anchor=(1, 1), loc='upper left', ncol=1)
+        ax.grid()
+        ax.view_init(elev=elev, azim=azim)
+    else:
+        ax = fig.add_subplot(1, 1, 1)
+        ax.set_xlabel(f'principal component {pc[0]}', fontsize=15)
+        ax.set_ylabel(f'principal component {pc[1]}', fontsize=15)
+        ax.set_title('2 component PCA', fontsize=20)
+        for target in targets:
+            indices_to_keep = data['Target'] == target
+            ax.scatter(data.loc[indices_to_keep, f'principal component {pc[0]}'],
+                       data.loc[indices_to_keep, f'principal component {pc[1]}'],
+                       s=50)
+            if labels:
+                label = str(data.loc[indices_to_keep, ['Target']].values[0][0])
+                ax.annotate(label, (data.loc[indices_to_keep, f'principal component {pc[0]}'],
+                                    data.loc[indices_to_keep, f'principal component {pc[1]}']),
+                            textcoords='offset points',
+                            xytext=(0, 10),
+                            ha='center')
+        if legend:
+            ax.legend(targets, bbox_to_anchor=(1, 1), loc='upper left', ncol=1)
+        ax.grid()
+    return fig
