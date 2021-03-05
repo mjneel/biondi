@@ -530,7 +530,7 @@ def plot_xy_hist(total_cpec_coords, percentage_affected, xy_savefile,
         plt.savefig(hist_savefile, transparent=True, bbox_inches='tight', pad_inches=0)
 
 
-def montecarlo_histogram_overlay(x, y, filename):
+def montecarlo_histogram_overlay(x, y, filename, n_sims=1):
     """
     Generates a overlay histogram.
     :param filename: save filename
@@ -549,8 +549,9 @@ def montecarlo_histogram_overlay(x, y, filename):
     fig, ax1 = plt.subplots(figsize=(15, 15))
 
     ax1.hist(x, bins=23, range=(0, 1), label='Observed', alpha=0.9, ec='black')
-    ax2 = ax1.twinx()
-    ax2.hist(y.flatten(), bins=23, range=(0, 1), color='tab:orange', label='Monte Carlo', alpha=0.7, ec='black')
+    #ax2 = ax1.twinx()
+    sim = np.histogram(y.flatten(), bins=23, range=(0,1))
+    ax1.hist(sim[1][:-1], bins=sim[1], weights=sim[0]/n_sims, color='tab:orange', label='Monte Carlo', alpha=0.7, ec='black')
     fig.legend(loc=(0.7, 0.85))
 
     plt.savefig(filename, transparent=True, bbox_inches='tight', pad_inches=0)
