@@ -985,7 +985,6 @@ def per_sample_tile_normalization(sorted_tiles):
     for i in range(len(sorted_tiles)):
         # print(i + 1, 'out of', len(sorted_tiles))
         sample = sorted_tiles[i]
-        # TODO: consider normalizing channels individually
         image = (sample - np.mean(sample, axis=tuple(range(sample.ndim-1)))) / np.std(sample, axis=tuple(range(sample.ndim-1)))
         images.append(image)
     images = np.array(images)
