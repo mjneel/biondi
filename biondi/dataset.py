@@ -980,12 +980,13 @@ def convert_anc_to_box(anc_params, boundingbox, cls_key='cls-c4', cls_mask_key='
 
 
 def per_sample_tile_normalization(sorted_tiles):
+    """Per sample tile normalization. Channels are normalized individually."""
     images = []
     for i in range(len(sorted_tiles)):
         # print(i + 1, 'out of', len(sorted_tiles))
         sample = sorted_tiles[i]
         # TODO: consider normalizing channels individually
-        image = (sample - np.mean(sample)) / np.std(sample)
+        image = (sample - np.mean(sample, axis=tuple(range(sample.ndim-1)))) / np.std(sample, axis=tuple(range(sample.ndim-1)))
         images.append(image)
     images = np.array(images)
     return images
