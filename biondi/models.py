@@ -3,13 +3,15 @@ from tensorflow.keras import Input, Model, layers
 from jarvis.utils.display import imshow
 
 
-
 def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=False, shared_weights=False):
     """Generates retinanet with resnet backbone. Can specify if classification and regression networks share weights"""
     r_model = resnet50_3d(inputs=inputs['dat'],
-                        filter_ratio=filter_ratio,
-                        n=n,
-                        include_fc_layer=include_fc_layer)
+                          filter_ratio=filter_ratio,
+                          n=n,
+                          include_fc_layer=include_fc_layer,
+                          kernal1=(1, 1, 1),
+                          kernal3=(1, 3, 3),
+                          kernal7=(1, 7, 7))
     backbone_output = [r_model.get_layer(layer_name).output for layer_name in ['c3-output', 'c4-output', 'c5-output']]
     fp_out = feature_pyramid_3d(inputs=backbone_output,
                                 filter_ratio=filter_ratio)
@@ -22,7 +24,8 @@ def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=Fa
     return model
 
 
-def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False, kernal1=(1,1,1), kernal3=(3,3,3), kernal7=(7,7,7)):
+def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False, kernal1=(1, 1, 1), kernal3=(3, 3, 3),
+                kernal7=(7, 7, 7)):
     """
 
     :param inputs: Keras Input object with desire shape
@@ -107,60 +110,60 @@ def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False, kernal1=(1,
     # stage 1 c2 1/4
     res1 = max_pool(zeropad(relu(norm(conv7(zeropad(inputs,
                                                     (0, 3, 3)),
-                                            int(64*filter_ratio),
+                                            int(64 * filter_ratio),
                                             strides=(1, 2, 2)))),
                             (0, 1, 1)),
                     (1, 3, 3),
                     strides=(1, 2, 2))
     # stage 2 c2 1/4
     res2 = layers.Lambda(lambda x: x, name='c2-output')(
-        identity_block(int(64*filter_ratio),
-                       int(256*filter_ratio),
-                       identity_block(int(64*filter_ratio),
-                                      int(256*filter_ratio),
-                                      conv_block(int(64*filter_ratio),
-                                                 int(256*filter_ratio),
+        identity_block(int(64 * filter_ratio),
+                       int(256 * filter_ratio),
+                       identity_block(int(64 * filter_ratio),
+                                      int(256 * filter_ratio),
+                                      conv_block(int(64 * filter_ratio),
+                                                 int(256 * filter_ratio),
                                                  res1,
                                                  strides=1)))
     )
     # stage 3 c3 1/8
     res3 = layers.Lambda(lambda x: x, name='c3-output')(
-        identity_block(int(128*filter_ratio),
-                       int(512*filter_ratio),
-                       identity_block(int(128*filter_ratio),
-                                      int(512*filter_ratio),
-                                      identity_block(int(128*filter_ratio),
-                                                     int(512*filter_ratio),
-                                                     conv_block(int(128*filter_ratio),
-                                                                int(512*filter_ratio),
+        identity_block(int(128 * filter_ratio),
+                       int(512 * filter_ratio),
+                       identity_block(int(128 * filter_ratio),
+                                      int(512 * filter_ratio),
+                                      identity_block(int(128 * filter_ratio),
+                                                     int(512 * filter_ratio),
+                                                     conv_block(int(128 * filter_ratio),
+                                                                int(512 * filter_ratio),
                                                                 res2,
                                                                 strides=(1, 2, 2)))))
     )
     # stage 4 c4 1/16
     res4 = layers.Lambda(lambda x: x, name='c4-output')(
-        identity_block(int(256*filter_ratio),
-                       int(1024*filter_ratio),
-                       identity_block(int(256*filter_ratio),
-                                      int(1024*filter_ratio),
-                                      identity_block(int(256*filter_ratio),
-                                                     int(1024*filter_ratio),
-                                                     identity_block(int(256*filter_ratio),
-                                                                    int(1024*filter_ratio),
-                                                                    identity_block(int(256*filter_ratio),
-                                                                                   int(1024*filter_ratio),
-                                                                                   conv_block(int(256*filter_ratio),
-                                                                                              int(1024*filter_ratio),
+        identity_block(int(256 * filter_ratio),
+                       int(1024 * filter_ratio),
+                       identity_block(int(256 * filter_ratio),
+                                      int(1024 * filter_ratio),
+                                      identity_block(int(256 * filter_ratio),
+                                                     int(1024 * filter_ratio),
+                                                     identity_block(int(256 * filter_ratio),
+                                                                    int(1024 * filter_ratio),
+                                                                    identity_block(int(256 * filter_ratio),
+                                                                                   int(1024 * filter_ratio),
+                                                                                   conv_block(int(256 * filter_ratio),
+                                                                                              int(1024 * filter_ratio),
                                                                                               res3,
                                                                                               strides=(1, 2, 2)))))))
     )
     # stage 5 c5 1/32
     res5 = layers.Lambda(lambda x: x, name='c5-output')(
-        identity_block(int(512*filter_ratio),
-                       int(2048*filter_ratio),
-                       identity_block(int(512*filter_ratio),
-                                      int(2048*filter_ratio),
-                                      conv_block(int(512*filter_ratio),
-                                                 int(2048*filter_ratio),
+        identity_block(int(512 * filter_ratio),
+                       int(2048 * filter_ratio),
+                       identity_block(int(512 * filter_ratio),
+                                      int(2048 * filter_ratio),
+                                      conv_block(int(512 * filter_ratio),
+                                                 int(2048 * filter_ratio),
                                                  res4,
                                                  strides=(1, 2, 2))))
     )
@@ -186,17 +189,17 @@ def feature_pyramid_3d(inputs, filter_ratio):
     conv1 = lambda x, filters, strides: layers.Conv3D(filters=filters, strides=strides, **kwargs1)(x)
     add = lambda x, y: layers.Add()([x, y])
     upsamp2x = lambda x: layers.UpSampling3D(size=(1, 2, 2))(x)
-    fp_block = lambda x, y: add(upsamp2x(x), conv1(y, int(256*filter_ratio), strides=1))
+    fp_block = lambda x, y: add(upsamp2x(x), conv1(y, int(256 * filter_ratio), strides=1))
     conv3 = lambda x, filters, strides: layers.Conv3D(filters=filters, strides=strides, **kwargs3)(x)
     relu = lambda x: layers.LeakyReLU()(x)
 
-    p5 = conv1(inputs[2], int(256*filter_ratio), strides=1)
+    p5 = conv1(inputs[2], int(256 * filter_ratio), strides=1)
     fp4 = fp_block(p5, inputs[1])
-    p4 = conv3(fp4, int(256*filter_ratio), strides=1)
+    p4 = conv3(fp4, int(256 * filter_ratio), strides=1)
     fp3 = fp_block(fp4, inputs[0])
-    p3 = conv3(fp3, int(256*filter_ratio), strides=1)
-    p6 = conv3(p5, int(256*filter_ratio), strides=(1, 2, 2))
-    p7 = conv3(relu(p6), int(256*filter_ratio), strides=(1, 2, 2))
+    p3 = conv3(fp3, int(256 * filter_ratio), strides=1)
+    p6 = conv3(p5, int(256 * filter_ratio), strides=(1, 2, 2))
+    p7 = conv3(relu(p6), int(256 * filter_ratio), strides=(1, 2, 2))
     return [p3, p4, p5, p6, p7]
 
 
@@ -581,13 +584,13 @@ def classification_head(K, A, filter_ratio=1):
                                                 filters,
                                                 strides=1))
 
-    inputs = Input(shape=(None, None, None, int(256*filter_ratio)))
-    c1 = conv_class1(int(256*filter_ratio),
-                     conv_class1(int(256*filter_ratio),
-                                 conv_class1(int(256*filter_ratio),
-                                             conv_class1(int(256*filter_ratio),
+    inputs = Input(shape=(None, None, None, int(256 * filter_ratio)))
+    c1 = conv_class1(int(256 * filter_ratio),
+                     conv_class1(int(256 * filter_ratio),
+                                 conv_class1(int(256 * filter_ratio),
+                                             conv_class1(int(256 * filter_ratio),
                                                          inputs))))
-    c2 = conv3(c1, K*A, strides=1)
+    c2 = conv3(c1, K * A, strides=1)
     class_subnet = Model(inputs=inputs, outputs=c2)
     return class_subnet
 
@@ -605,13 +608,13 @@ def regression_head(A, filter_ratio=1):
                                                 filters,
                                                 strides=1))
 
-    inputs = Input(shape=(None, None, None, int(256*filter_ratio)))
-    b1 = conv_class1(int(256*filter_ratio),
-                     conv_class1(int(256*filter_ratio),
-                                 conv_class1(int(256*filter_ratio),
-                                             conv_class1(int(256*filter_ratio),
+    inputs = Input(shape=(None, None, None, int(256 * filter_ratio)))
+    b1 = conv_class1(int(256 * filter_ratio),
+                     conv_class1(int(256 * filter_ratio),
+                                 conv_class1(int(256 * filter_ratio),
+                                             conv_class1(int(256 * filter_ratio),
                                                          inputs))))
-    b2 = conv3(b1, 4*A, strides=1)
+    b2 = conv3(b1, 4 * A, strides=1)
 
     box_subnet = Model(inputs=inputs, outputs=b2)
     return box_subnet
@@ -765,15 +768,15 @@ def unet(inputs, num_layers=6, num_classes=2, _3d=False):
         if i == 0:
             contracting_layers.append(conv1(8, inputs['dat']))
         else:
-            contracting_layers.append(c_layer(16*i, contracting_layers[i-1]))
+            contracting_layers.append(c_layer(16 * i, contracting_layers[i - 1]))
     expanding_layers = []
-    for j in reversed(range(num_layers-1)):  # 4,3,2,1,0
-        if j == num_layers-2:
-            expanding_layers.append(tran2(16*j, contracting_layers[j+1]))
+    for j in reversed(range(num_layers - 1)):  # 4,3,2,1,0
+        if j == num_layers - 2:
+            expanding_layers.append(tran2(16 * j, contracting_layers[j + 1]))
         else:
-            expanding_layers.append(e_layer(16*j if j != 0 else 8,
-                                            16*(j+1),
-                                            expanding_layers[-1] + contracting_layers[j+1]))
+            expanding_layers.append(e_layer(16 * j if j != 0 else 8,
+                                            16 * (j + 1),
+                                            expanding_layers[-1] + contracting_layers[j + 1]))
     last_layer = conv1(8, conv1(8, expanding_layers[-1] + contracting_layers[0]))
 
     # --- Create logits
