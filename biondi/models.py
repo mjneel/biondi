@@ -22,7 +22,7 @@ def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=Fa
     return model
 
 
-def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False):
+def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False, kernal1=(1,1,1), kernal3=(3,3,3), kernal7=(7,7,7)):
     """
 
     :param inputs: Keras Input object with desire shape
@@ -38,15 +38,15 @@ def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False):
     """
     # --- Define kwargs dictionary
     kwargs1 = {
-        'kernel_size': (1, 1, 1),
+        'kernel_size': kernal1,
         'padding': 'valid',
     }
     kwargs3 = {
-        'kernel_size': (1, 3, 3),
+        'kernel_size': kernal3,
         'padding': 'same',
     }
     kwargs7 = {
-        'kernel_size': (1, 7, 7),
+        'kernel_size': kernal7,
         'padding': 'valid',
     }
     # --- Define block components

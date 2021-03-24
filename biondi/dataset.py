@@ -979,20 +979,31 @@ def convert_anc_to_box(anc_params, boundingbox, cls_key='cls-c4', cls_mask_key='
     return cls, reg, cls_mask, reg_mask
 
 
-def per_sample_tile_normalization(sorted_tiles):
+def per_sample_tile_normalization(sorted_tiles, per_channel=False):
     """Per sample tile normalization. Channels are normalized individually."""
-    images = []
-    for i in range(len(sorted_tiles)):
-        # print(i + 1, 'out of', len(sorted_tiles))
-        sample = sorted_tiles[i]
-        image = (sample - np.mean(sample, axis=tuple(range(sample.ndim-1)))) / np.std(sample, axis=tuple(range(sample.ndim-1)))
-        images.append(image)
-    images = np.array(images)
-    return images
+    if per_channel:
+        images = []
+        for i in range(len(sorted_tiles)):
+            # print(i + 1, 'out of', len(sorted_tiles))
+            sample = sorted_tiles[i]
+            image = (sample - np.mean(sample, axis=tuple(range(sample.ndim - 1)))) / np.std(sample, axis=tuple(
+                range(sample.ndim - 1)))
+            images.append(image)
+        images = np.array(images)
+        return images
+    else:
+        images = []
+        for i in range(len(sorted_tiles)):
+            # print(i + 1, 'out of', len(sorted_tiles))
+            sample = sorted_tiles[i]
+            image = (sample - np.mean(sample)) / np.std(sample)
+            images.append(image)
+        images = np.array(images)
+        return images
 
 
 def normalized_tiles_and_bbox_params_from_wsi_tiles(wsi_tiles_filename, coords, boundingbox, normalize=False,
-                                                    bbox_size=64, tile_size=1024):
+                                                    bbox_size=64, tile_size=1024, per_channel=False):
     tiles = np.load(wsi_tiles_filename)
     if tiles.shape[3] == 4:
         tiles = tiles[:, :, :, :-1]
@@ -1010,7 +1021,7 @@ def normalized_tiles_and_bbox_params_from_wsi_tiles(wsi_tiles_filename, coords, 
     tiles = None
     cls, reg, cls_mask, reg_mask = convert_anc_to_box(sorted_anc, boundingbox)
     if normalize:
-        images = per_sample_tile_normalization(sorted_tiles)
+        images = per_sample_tile_normalization(sorted_tiles, per_channel=per_channel)
     else:
         images = sorted_tiles
     return images, cls, reg, cls_mask, reg_mask
@@ -1043,7 +1054,7 @@ def anc_params_from_mosaics(mosaic_metadata, coords, bbox_size=64, tile_size=102
 
 def normalized_tiles_and_bbox_params_from_wsi_mosaic(wsi_tiles_filename, mosaic_metadata, coords, boundingbox,
                                                      normalize=False,
-                                                     bbox_size=64, tile_size=1024):
+                                                     bbox_size=64, tile_size=1024, per_channel=False):
     mosaic = np.load(mosaic_metadata)
     tiles = np.load(wsi_tiles_filename)
     anc = anc_params_from_mosaics(mosaic_metadata=mosaic, coords=coords, bbox_size=bbox_size, tile_size=tile_size)
@@ -1058,7 +1069,7 @@ def normalized_tiles_and_bbox_params_from_wsi_mosaic(wsi_tiles_filename, mosaic_
     sorted_tiles = np.array(sorted_tiles)
     cls, reg, cls_mask, reg_mask = convert_anc_to_box(sorted_anc, boundingbox)
     if normalize:
-        images = per_sample_tile_normalization(sorted_tiles)
+        images = per_sample_tile_normalization(sorted_tiles, per_channel=per_channel)
     else:
         images = sorted_tiles
     return images, cls, reg, cls_mask, reg_mask
@@ -1085,7 +1096,8 @@ def convert_anc_to_box_v2_2d(anc_params, boundingbox):
 
 
 def normalized_tiles_and_bbox_params_from_wsi_mosaic_v2(wsi_tiles_filename, mosaic_metadata, coords, boundingbox,
-                                                        normalize=False, bbox_size=64, tile_size=1024):
+                                                        normalize=False, bbox_size=64, tile_size=1024,
+                                                        per_channel=False):
     mosaic = np.load(mosaic_metadata)
     tiles = np.load(wsi_tiles_filename)
     if tiles.shape[3] == 4:
@@ -1100,17 +1112,17 @@ def normalized_tiles_and_bbox_params_from_wsi_mosaic_v2(wsi_tiles_filename, mosa
             sorted_tiles.append(tiles[mosaic[i]])
             sorted_anc.append((anc[i]))
     sorted_tiles = np.array(sorted_tiles)
-    tiles = None
+    del tiles
     im_boxes = convert_anc_to_box_v2_2d(sorted_anc, boundingbox)
     if normalize:
-        images = per_sample_tile_normalization(sorted_tiles)
+        images = per_sample_tile_normalization(sorted_tiles, per_channel=per_channel)
     else:
         images = sorted_tiles
     return images, im_boxes
 
 
 def normalized_tiles_and_bbox_params_from_wsi_tiles_v2(wsi_tiles_filename, coords, boundingbox, normalize=False,
-                                                       bbox_size=64, tile_size=1024):
+                                                       bbox_size=64, tile_size=1024, per_channel=False):
     tiles = np.load(wsi_tiles_filename)
     if tiles.shape[3] == 4:
         tiles = tiles[:, :, :, :-1]
@@ -1125,10 +1137,10 @@ def normalized_tiles_and_bbox_params_from_wsi_tiles_v2(wsi_tiles_filename, coord
             sorted_tiles.append(tiles[i])
             sorted_anc.append((anc[i]))
     sorted_tiles = np.array(sorted_tiles)
-    tiles = None
+    del tiles
     im_boxes = convert_anc_to_box_v2_2d(sorted_anc, boundingbox)
     if normalize:
-        images = per_sample_tile_normalization(sorted_tiles)
+        images = per_sample_tile_normalization(sorted_tiles, per_channel=per_channel)
     else:
         images = sorted_tiles
     return images, im_boxes
@@ -1256,7 +1268,7 @@ def convert_mosaic_coords_to_wsi(coords, metadata, wsi_tiles_filename, tile_size
     :param coords:
     :type coords:
     :param metadata:
-    :type metadata: array
+    :type metadata:
     :param wsi_tiles_filename:
     :type wsi_tiles_filename:
     :param tile_size:
@@ -1298,8 +1310,7 @@ def get_retinanet_training_dictionary_from_mosaic(wsi_tiles_filename, coords, bo
     return boxes
 
 
-def randomize_and_segregate_dataset_retinanet_dictionary(dictionary, training_percent=0.7, validation_percent=0.15,
-                                                         test_percent=0.15):
+def randomize_and_segregate_dataset_retinanet_dictionary(dictionary, validation_percent=0.15, test_percent=0.15):
     """
     Shuffles and splits images and box anchors into 3 dataset dictionaries:
     training, validation, and test datasets
@@ -1321,7 +1332,7 @@ def randomize_and_segregate_dataset_retinanet_dictionary(dictionary, training_pe
     return training_dic, validation_dic, test_dic
 
 
-def retinanet_generator(data, batchsize=1, normalize=True):
+def retinanet_generator(data, batchsize=1, normalize=True, per_channel=False):
     i = 0
     keys = data.keys()
     while True:
@@ -1337,7 +1348,7 @@ def retinanet_generator(data, batchsize=1, normalize=True):
         for key in keys:
             if 'dat' in key:
                 if normalize:
-                    xbatch[key] = per_sample_tile_normalization(data[key][start:stop])
+                    xbatch[key] = per_sample_tile_normalization(data[key][start:stop], per_channel=per_channel)
                 else:
                     xbatch[key] = data[key][start:stop]
             elif 'msk' in key:
@@ -1348,18 +1359,18 @@ def retinanet_generator(data, batchsize=1, normalize=True):
         yield xbatch, ybatch
 
 
-def retinanet_prediction_generator(images, boundingbox):
+def retinanet_prediction_generator(images, boundingbox, per_channel=False):
     # TODO: Not sure what this is for or when it was used. Consider deleting or making it an actual generator.
-    pred_dic = {'dat': per_sample_tile_normalization(np.expand_dims(images, axis=1))}
+    pred_dic = {'dat': per_sample_tile_normalization(np.expand_dims(images, axis=1), per_channel=per_channel)}
     for key in boundingbox.params['inputs_shapes'].keys():
         if 'msk' in key:
-            pred_dic[key] = np.zeros(shape=(len(images),)+tuple(boundingbox.params['input_shapes'][key]))
+            pred_dic[key] = np.zeros(shape=(len(images),) + tuple(boundingbox.params['input_shapes'][key]))
     return pred_dic
 
 
-def retinanet_validation_generator(validation_dict):
+def retinanet_validation_generator(validation_dict, per_channel=False):
     val_dict = validation_dict.copy()
-    val_dict['dat'] = per_sample_tile_normalization(validation_dict['dat'])
+    val_dict['dat'] = per_sample_tile_normalization(validation_dict['dat'], per_channel=per_channel)
     return val_dict
 
 
@@ -1403,8 +1414,8 @@ def tile_sample_hdf5_generator(tile_stack_filename, sample_size=100, name=None):
         wsi_name = re.search('(^.{5,13}?)_', tile_stack_filename).group(1)
     filename = wsi_name + '_tile_sample_'
     previous_metadata = glob.glob(filename + '*.hdf5')
-    max_previous = max([int(re.search('sample_(.{1,2}?).hdf5', i).group(1)) for i in previous_metadata]+[0])
-    full_filename = filename + str(max_previous+1) + '.hdf5'
+    max_previous = max([int(re.search('sample_(.{1,2}?).hdf5', i).group(1)) for i in previous_metadata] + [0])
+    full_filename = filename + str(max_previous + 1) + '.hdf5'
     tile_stack = np.load(tile_stack_filename)
     if max_previous == 0:
         p = np.random.permutation(len(tile_stack))
@@ -1418,15 +1429,15 @@ def tile_sample_hdf5_generator(tile_stack_filename, sample_size=100, name=None):
         p = f_old['full_randomized_tile_indices']
     print('Saving...')
     f = h5py.File(full_filename, 'w')
-    dset1 = f.create_dataset('images', data=tile_stack[p[:sample_size*(max_previous+1)]])
+    dset1 = f.create_dataset('images', data=tile_stack[p[:sample_size * (max_previous + 1)]])
     dset2 = f.create_dataset('rows-columns', data=np.array([num_of_rows, num_of_columns]))
-    dset3 = f.create_dataset('tile_index', data=p[:sample_size*(max_previous+1)])
+    dset3 = f.create_dataset('tile_index', data=p[:sample_size * (max_previous + 1)])
     dset4 = f.create_dataset('full_randomized_tile_indices', data=p)
     print('Saved as:', full_filename)
     return
 
 
-def unet_generator(imgs, masks):
+def unet_generator(imgs, masks, per_channel=False):
     i = 0
     names = list(imgs.keys())
     while True:
@@ -1434,7 +1445,7 @@ def unet_generator(imgs, masks):
             i = 0
             p = np.random.permutation(len(names))
             names = names[p]
-        img = per_sample_tile_normalization(np.expand_dims(imgs[names[i]][:], axis=0))
+        img = per_sample_tile_normalization(np.expand_dims(imgs[names[i]][:], axis=0), per_channel=per_channel)
         msk = np.expand_dims(masks[names[i]][:], axis=0)
         i += 1
         yield img, msk
@@ -1444,13 +1455,13 @@ def sliding_window_generator(img, batchsize=16, window_size=64):
     # img should be a 4D array
     # window_size must be even
     windows = skimage.util.view_as_windows(np.pad(img,
-                                                  ((int(window_size/2), int(window_size/2)-1),
-                                                   (int(window_size/2), int(window_size/2)-1),
-                                                   (int(window_size/2), int(window_size/2)-1),
+                                                  ((int(window_size / 2), int(window_size / 2) - 1),
+                                                   (int(window_size / 2), int(window_size / 2) - 1),
+                                                   (int(window_size / 2), int(window_size / 2) - 1),
                                                    (0, 0)),
                                                   'constant',
                                                   constant_values=0),
-                                           (window_size,window_size,window_size,3),
+                                           (window_size, window_size, window_size, 3),
                                            step=1)
     counter = 0
     im_batch = []
@@ -1463,42 +1474,55 @@ def sliding_window_generator(img, batchsize=16, window_size=64):
                 if counter == batchsize:
                     yield np.stack(im_batch)
                     counter = 0
-                    im_batch=[]
+                    im_batch = []
 
 
 def count_num_objs(msk, threshold, display_im=True):
     import copy
     labeled_msk = skimage.measure.label(msk, return_num=True, connectivity=3)
-    #print('Before cleanup:', labeled_msk[1], 'objects')
+    # print('Before cleanup:', labeled_msk[1], 'objects')
     obj_vol = np.unique(labeled_msk[0], return_counts=True)
     # Number of object at each found voxel size
     vol_prevalence = np.unique(obj_vol[1], return_counts=True)
-    obj_to_drop = obj_vol[0][obj_vol[1]<threshold]
-    #print('After cleanup:', labeled_msk[1] - len(obj_to_drop), 'objects')
+    obj_to_drop = obj_vol[0][obj_vol[1] < threshold]
+    # print('After cleanup:', labeled_msk[1] - len(obj_to_drop), 'objects')
     msk2 = copy.deepcopy(labeled_msk[0])
     for label in obj_to_drop:
-        msk2[msk2==label] = 0
-    msk2[msk2>0] = 1
+        msk2[msk2 == label] = 0
+    msk2[msk2 > 0] = 1
     if display_im:
-        #before cleanup
+        # before cleanup
         print('Before cleanup:', labeled_msk[1], 'objects')
         plt.imshow(np.max(msk, axis=0))
         plt.show()
-        #after cleanup
+        # after cleanup
         print('After cleanup:', labeled_msk[1] - len(obj_to_drop), 'objects')
         plt.imshow(np.max(msk2, axis=0))
         plt.show()
     return msk2
 
 
-def generate_3d_binary_mask(image_fn_list, channel_index=1, voxel_threshold=50, sigma=1, kernel=(5,7,7), save_tiff=False, save_npy=True, src_fldr=None, dst_fldr=None):
+def generate_3d_binary_mask(image_fn_list, channel_index=1, voxel_threshold=50, sigma=1, kernel=(5, 7, 7),
+                            save_tiff=False, save_npy=True, src_fldr=None, dst_fldr=None):
     """
     *** Requires dev version of scipy for background subtraction ***
     Generates binary masked based on a single channel. Applies gaussian blurring followed by background subtraction
     using the rolling ball algorithm (similar to imagej) and finally generates a binary image based on ostu
     thresholding.
-    :param image:
-    :type image:
+    :param sigma:
+    :type sigma:
+    :param kernel:
+    :type kernel:
+    :param dst_fldr:
+    :type dst_fldr:
+    :param src_fldr:
+    :type src_fldr:
+    :param save_npy:
+    :type save_npy:
+    :param save_tiff:
+    :type save_tiff:
+    :param image_fn_list:
+    :type image_fn_list:
     :param channel_index:
     :type channel_index:
     :param voxel_threshold:
@@ -1507,43 +1531,46 @@ def generate_3d_binary_mask(image_fn_list, channel_index=1, voxel_threshold=50, 
     :rtype:
     """
     from skimage import filters, restoration
-    def check_input_number(image_fn):
+
+    def check_input_number(image_filename):
         while True:
             try:
-                user_input = int(input(f'{image_fn} has more than 3 channels! Specify the desired channel index.'))
+                user_input = int(input(f'{image_filename} has >3 channels! Specify the desired channel index.'))
             except ValueError:
                 print("Not an integer! Try again.")
                 continue
             else:
                 return user_input
-                break
 
-    def create_mask(image_fn, src_fldr=src_fldr, channel_index=channel_index, voxel_threshold=voxel_threshold, sigma=sigma, kernel=kernel):
-        if src_fldr:
-            image = skimage.io.imread(src_fldr + image_fn)
+    def create_mask(image_filename, source_folder=None, channel_index_=None, voxel_threshold_=None,
+                    sigma_=None, kernel_=None):
+        if source_folder:
+            image = skimage.io.imread(source_folder + image_filename)
         else:
-            image = skimage.io.imread(image_fn)
+            image = skimage.io.imread(image_filename)
         if image.shape[-1] != 3:
-            blurred_image = filters.gaussian(image[..., check_input_number(image_fn)], sigma=sigma, preserve_range=True)
+            blurred_image = filters.gaussian(image[..., check_input_number(image_filename)], sigma=sigma_,
+                                             preserve_range=True)
         else:
-            blurred_image = filters.gaussian(image[..., channel_index], sigma=sigma, preserve_range=True)
-        background = restoration.rolling_ball(blurred_image, kernel=restoration.ellipsoid_kernel(kernel, 0.1))
-        bkgrd_sub = blurred_image-background
+            blurred_image = filters.gaussian(image[..., channel_index_], sigma=sigma_, preserve_range=True)
+        background = restoration.rolling_ball(blurred_image, kernel=restoration.ellipsoid_kernel(kernel_, 0.1))
+        bkgrd_sub = blurred_image - background
         ostu_thresh = filters.threshold_otsu(bkgrd_sub)
-        binary_msk = bkgrd_sub>=ostu_thresh
-        cleanedup = count_num_objs(binary_msk, threshold=voxel_threshold, display_im=False)
+        binary_msk = bkgrd_sub >= ostu_thresh
+        cleanedup = count_num_objs(binary_msk, threshold=voxel_threshold_, display_im=False)
         return cleanedup
 
     for image_fn in image_fn_list:
         print(f'Working on {image_fn}', end=' ')
-        mask = create_mask(image_fn, channel_index=channel_index, voxel_threshold=voxel_threshold, sigma=sigma, kernel=kernel)
+        mask = create_mask(image_fn, source_folder=src_fldr, channel_index_=channel_index,
+                           voxel_threshold_=voxel_threshold, sigma_=sigma, kernel_=kernel)
         if save_npy:
             if dst_fldr:
                 np.save(dst_fldr + image_fn[:-4] + '_mask.npy', mask)
             else:
                 np.save(image_fn[:-4] + '_mask.npy', mask)
         if save_tiff:
-            mask[mask==1] = 255
+            mask[mask == 1] = 255
             if dst_fldr:
                 skimage.io.imsave(dst_fldr + image_fn[:-4] + '_mask.tif', mask.astype('uint8'))
             else:
@@ -1558,7 +1585,7 @@ def quarter_divider(image):
         image = np.expand_dims(image, axis=-1)
     dim_length = image.shape[-2]
     if dim_length % 2 == 0:
-        half_length = dim_length//2
+        half_length = dim_length // 2
         new_im1 = image[:, :half_length, :half_length, :]
         new_im2 = image[:, :half_length, half_length:, :]
         new_im3 = image[:, half_length:, :half_length, :]
@@ -1583,9 +1610,9 @@ def batch_quarter_divider(batch_fn, dst_fldr=None, save_tif=False):
             continue
         for i in range(4):
             if dst_fldr:
-                np.save(f'{dst_fldr}{img_name}_quarter{i+1}.npy', images[i])
+                np.save(f'{dst_fldr}{img_name}_quarter{i + 1}.npy', images[i])
                 if save_tif:
-                    skimage.io.imsave(f'{dst_fldr}{img_name}_quarter{i+1}.tif', images[i])
+                    skimage.io.imsave(f'{dst_fldr}{img_name}_quarter{i + 1}.tif', images[i])
             else:
                 np.save(f'{img_name_path}_quarter{i + 1}.npy', images[i])
                 if save_tif:
@@ -1615,54 +1642,55 @@ def add_border_to_mask(mask):
     return new_mask
 
 
-def np_data_generator(images, labels, batch_size=16):
+def np_data_generator(images, labels, batch_size=16, per_channel=False):
     i = 0
     while True:
-        if i == (len(images)//batch_size):
+        if i == (len(images) // batch_size):
             i = 0
             p = np.random.permutation(len(images))
             images = images[p]
             labels = labels[p]
         start = i * batch_size
         stop = start + batch_size
-        xbatch = per_sample_tile_normalization(images[start:stop])
+        xbatch = per_sample_tile_normalization(images[start:stop], per_channel=per_channel)
         ybatch = labels[start:stop]
         i += 1
         yield xbatch, ybatch
 
 
-def np_validation_generator(images, labels, batch_size=16):
+def np_validation_generator(images, labels, batch_size=16, per_channel=False):
     i = 0
     while True:
         if i == (len(images) // batch_size):
             i = 0
         start = i * batch_size
         stop = start + batch_size
-        xbatch = per_sample_tile_normalization(images[start:stop])
+        xbatch = per_sample_tile_normalization(images[start:stop], per_channel=per_channel)
         ybatch = labels[start:stop]
         i += 1
         yield xbatch, ybatch
 
 
-def np_prediction_generator(filename, batch_size=16):
+def np_prediction_generator(filename, batch_size=16, per_channel=False):
     im = np.load(filename)
-    if len(im)%batch_size == 0:
-        for i in range(len(im)//batch_size):
+    if len(im) % batch_size == 0:
+        for i in range(len(im) // batch_size):
             start = i * batch_size
             stop = start + batch_size
-            xbatch = per_sample_tile_normalization(im[start:stop])
+            xbatch = per_sample_tile_normalization(im[start:stop], per_channel=per_channel)
             yield xbatch
     else:
-        for i in range((len(im)//batch_size)+1):
+        for i in range((len(im) // batch_size) + 1):
             start = i * batch_size
-            if i == (len(im)//batch_size):
-                xbatch = per_sample_tile_normalization(im[start:])
+            if i == (len(im) // batch_size):
+                xbatch = per_sample_tile_normalization(im[start:], per_channel=per_channel)
                 yield xbatch
             else:
                 stop = start + batch_size
-                xbatch = per_sample_tile_normalization(im[start:stop])
+                xbatch = per_sample_tile_normalization(im[start:stop], per_channel=per_channel)
                 yield xbatch
 
 
 def aggregate_retinanet_training_dictionaries(dicts):
     aggregated_dictionary = {key: np.concatenate([dic[key] for dic in dicts], axis=0) for key in dicts[0].keys()}
+    return aggregated_dictionary
