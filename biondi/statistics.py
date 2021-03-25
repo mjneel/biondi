@@ -548,10 +548,10 @@ def montecarlo_histogram_overlay(x, y, filename, n_sims=1):
     matplotlib.rc('font', **font)
     fig, ax1 = plt.subplots(figsize=(15, 15))
 
-    ax1.hist(x, bins=23, range=(0, 1), label='Observed', alpha=0.9, ec='black')
     #ax2 = ax1.twinx()
     sim = np.histogram(y.flatten(), bins=23, range=(0,1))
-    ax1.hist(sim[1][:-1], bins=sim[1], weights=sim[0]/n_sims, color='tab:orange', label='Monte Carlo', alpha=0.7, ec='black')
+    ax1.hist(sim[1][:-1], bins=sim[1], weights=sim[0]/n_sims, color='tab:grey', label='Monte Carlo', alpha=0.7, ec='black')
+    ax1.hist(x, bins=23, range=(0, 1), label='Observed', alpha=0.6, ec='black')
     fig.legend(loc=(0.7, 0.85))
 
     plt.savefig(filename, transparent=True, bbox_inches='tight', pad_inches=0)
