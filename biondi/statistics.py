@@ -605,6 +605,7 @@ def sort_affected_coords_from_aipredictions(aipredictions, coords):
 
 def kolmogorov_smirnov_statistic_for_wsi_montecarlo_simulations(obs_pa, simulated_pa, start=None, stop=None,
                                                                 observed_only=False, test_observed=False):
+    # Todo: add option to provide variable instead of filename
     sim_dvalues = []
     sim_pvalues = []
     observed = np.load(obs_pa)

@@ -16,6 +16,7 @@ import cv2 as cv
 from tensorflow import keras
 from sklearn.neighbors import KDTree
 import h5py
+import pandas as pd
 import pickle
 
 
@@ -1359,16 +1360,87 @@ def retinanet_generator(data, batchsize=1, normalize=True, per_channel=False):
         yield xbatch, ybatch
 
 
+def retinanet_eval_generator(data, batchsize=1, normalize=True, per_channel=False):
+    full_steps = (len(data['dat']) // batchsize)
+    if len(data['dat']) % batchsize != 0:
+        partial_step = 1
+    else:
+        partial_step = 0
+    keys = data.keys()
+    for i in range(full_steps+partial_step):
+        start = i * batchsize
+        stop = start + batchsize
+        if stop > len(data['dat']):
+            stop = len(data['dat'])
+        xbatch = {}
+        ybatch = {}
+        for key in keys:
+            if 'dat' in key:
+                if normalize:
+                    xbatch[key] = per_sample_tile_normalization(data[key][start:stop], per_channel=per_channel)
+                else:
+                    xbatch[key] = data[key][start:stop]
+            elif 'msk' in key:
+                xbatch[key] = data[key][start:stop]
+            else:
+                ybatch[key] = data[key][start:stop]
+        i += 1
+        yield xbatch, ybatch
+
+
+
+def retinanet_evaluation(evaluation_generator, model, bb):
+    ious = {
+        'med': [],
+        'p25': [],
+        'p75': [],
+    }
+    for x, y in evaluation_generator:
+        box = model.predict(x)
+        # list check taken from peter's tutorial. Not sure if needed for my code but included it just in case.
+        if type(box) is list:
+            box = {name: pred for name, pred in zip(model.output_names, box)}
+        anchors_pred, _ = bb.convert_box_to_anc(box)
+        anchors_true, _ = bb.convert_box_to_anc(y)
+
+        curr = []
+        for pred, true in zip(anchors_pred, anchors_true):
+            for p in pred:
+                iou = bb.calculate_ious(box=p, anchors=true)
+                if iou.size > 0:
+                    curr.append(np.max(iou))
+                else:
+                    curr.append(0)
+        if len(curr) == 0:
+            curr = [0]
+        ious['med'].append(np.median(curr))
+        ious['p25'].append(np.percentile(curr, 25))
+        ious['p75'].append(np.percentile(curr, 75))
+    ious = {k: np.array(v) for k, v in ious.items()}
+
+    # --- Define columns
+    df = pd.DataFrame(index=np.arange(ious['med'].size))
+    df['iou_median'] = ious['med']
+    df['iou_p-25th'] = ious['p25']
+    df['iou_p-75th'] = ious['p75']
+
+    # --- Print accuracy
+    print(df['iou_median'].median())
+    print(df['iou_p-25th'].median())
+    print(df['iou_p-75th'].median())
+    return df
+
 def retinanet_prediction_generator(images, boundingbox, per_channel=False):
-    # TODO: Not sure what this is for or when it was used. Consider deleting or making it an actual generator.
+    #TODO: consider changing name since this is not a generator or modify code to make it a generator
     pred_dic = {'dat': per_sample_tile_normalization(np.expand_dims(images, axis=1), per_channel=per_channel)}
     for key in boundingbox.params['inputs_shapes'].keys():
         if 'msk' in key:
-            pred_dic[key] = np.zeros(shape=(len(images),) + tuple(boundingbox.params['input_shapes'][key]))
+            pred_dic[key] = np.zeros(shape=(len(images),) + tuple(boundingbox.params['inputs_shapes'][key]))
     return pred_dic
 
 
 def retinanet_validation_generator(validation_dict, per_channel=False):
+    #TODO: does not work as val_gen for model training, consider removing or recoding
     val_dict = validation_dict.copy()
     val_dict['dat'] = per_sample_tile_normalization(validation_dict['dat'], per_channel=per_channel)
     return val_dict
