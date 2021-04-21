@@ -17,6 +17,7 @@ from tensorflow import keras
 from sklearn.neighbors import KDTree
 import h5py
 import pandas as pd
+import biondi.statistics
 import pickle
 
 
@@ -241,7 +242,10 @@ def wsi_cell_extraction_from_coords_v3(wsi_image_filename, im_size, coords):
     im_size -- size in pixels for extracted images
     coords -- list or array of coordinates in order
     """
-    wsi = openslide.open_slide(wsi_image_filename)
+    if type(wsi_image_filename) is str:
+        wsi = openslide.open_slide(wsi_image_filename)
+    else:
+        wsi = wsi_image_filename
     cells = []
     counter = 0
     for i in coords:
@@ -1350,7 +1354,8 @@ def retinanet_generator(data, batchsize=1, normalize=True, per_channel=False, tw
             if 'dat' in key:
                 if normalize:
                     if two_channel:
-                        xbatch[key] = per_sample_tile_normalization(data[key][start:stop, ..., 1:3], per_channel=per_channel)
+                        xbatch[key] = per_sample_tile_normalization(data[key][start:stop, ..., 1:3],
+                                                                    per_channel=per_channel)
                     else:
                         xbatch[key] = per_sample_tile_normalization(data[key][start:stop], per_channel=per_channel)
                 else:
@@ -1373,7 +1378,7 @@ def retinanet_eval_generator(data, batchsize=1, normalize=True, per_channel=Fals
     else:
         partial_step = 0
     keys = data.keys()
-    for i in range(full_steps+partial_step):
+    for i in range(full_steps + partial_step):
         start = i * batchsize
         stop = start + batchsize
         if stop > len(data['dat']):
@@ -1392,7 +1397,6 @@ def retinanet_eval_generator(data, batchsize=1, normalize=True, per_channel=Fals
                 ybatch[key] = data[key][start:stop]
         i += 1
         yield xbatch, ybatch
-
 
 
 def retinanet_evaluation(evaluation_generator, model, bb):
@@ -1436,8 +1440,9 @@ def retinanet_evaluation(evaluation_generator, model, bb):
     print(df['iou_p-75th'].median())
     return df
 
+
 def retinanet_prediction_generator(images, boundingbox, per_channel=False):
-    #TODO: consider changing name since this is not a generator or modify code to make it a generator
+    # TODO: consider changing name since this is not a generator or modify code to make it a generator
     pred_dic = {'dat': per_sample_tile_normalization(np.expand_dims(images, axis=1), per_channel=per_channel)}
     for key in boundingbox.params['inputs_shapes'].keys():
         if 'msk' in key:
@@ -1446,7 +1451,7 @@ def retinanet_prediction_generator(images, boundingbox, per_channel=False):
 
 
 def retinanet_validation_generator(validation_dict, per_channel=False):
-    #TODO: does not work as val_gen for model training, consider removing or recoding
+    # TODO: does not work as val_gen for model training, consider removing or recoding
     val_dict = validation_dict.copy()
     val_dict['dat'] = per_sample_tile_normalization(validation_dict['dat'], per_channel=per_channel)
     return val_dict
@@ -1548,7 +1553,6 @@ def tile_sample_hdf5_generator_v2(wsi_filename, im_size=1024, sample_size=100, n
     dset3 = f.create_dataset('tile_index', data=p[:sample_size * (max_previous + 1)])
     dset4 = f.create_dataset('full_randomized_tile_indices', data=p)
     print('Saved as:', full_filename)
-
 
 
 def unet_generator(imgs, masks, per_channel=False):
@@ -1785,8 +1789,11 @@ def np_validation_generator(images, labels, batch_size=16, per_channel=False):
         yield xbatch, ybatch
 
 
-def np_prediction_generator(filename, batch_size=16, per_channel=False):
-    im = np.load(filename)
+def np_prediction_generator(images, batch_size=16, per_channel=False):
+    if type(images) is str:
+        im = np.load(images)
+    else:
+        im = images
     if len(im) % batch_size == 0:
         for i in range(len(im) // batch_size):
             start = i * batch_size
@@ -1808,3 +1815,158 @@ def np_prediction_generator(filename, batch_size=16, per_channel=False):
 def aggregate_retinanet_training_dictionaries(dicts):
     aggregated_dictionary = {key: np.concatenate([dic[key] for dic in dicts], axis=0) for key in dicts[0].keys()}
     return aggregated_dictionary
+
+
+def wsi_generator(WSI, boundingbox, batch_size=1, im_size=512, half_res=True, normalize=True, per_channel=False):
+    if type(WSI) is str:
+        wsi = openslide.open_slide(WSI)
+    else:
+        wsi = WSI
+    dim = wsi.dimensions
+    counter = 0
+    batch = []
+    if half_res:
+        model = half_tile_resolution(im_size)
+    for i in range(dim[1] // im_size):
+        for j in range(dim[0] // im_size):
+            # j represent position on x-axis (different from usual which is row #)
+            # i represent position on y-axis (different from usual which is column #)
+            batch.append(np.array(wsi.read_region((j * im_size, i * im_size), 0, (im_size, im_size)))[..., :-1])
+            counter += 1
+            if counter == batch_size:
+                images = np.array(batch)
+                counter = 0
+                batch = []
+                if half_res:
+                    images = model.predict(images)
+                if normalize:
+                    images = per_sample_tile_normalization(np.expand_dims(images, axis=1), per_channel=per_channel)
+                else:
+                    images = np.expand_dims(images, axis=1)
+                batch_dict = {'dat': images}
+                for key in boundingbox.params['inputs_shapes'].keys():
+                    if 'msk' in key:
+                        batch_dict[key] = np.zeros(
+                            shape=(batch_size,) + tuple(boundingbox.params['inputs_shapes'][key]))
+                yield batch_dict
+
+
+def local_to_global_coords_retinanet_v2(local_coords, num_of_columns, tile_size):
+    # local_coords is a list of arrays which should be in xy format
+    global_coords = []
+    for i in range(len(local_coords)):
+        if len(local_coords[i]) == 0:
+            continue
+        # get coords of tile
+        column = i % num_of_columns
+        row = i // num_of_columns
+        # pixel range
+        c_start = tile_size * column
+        r_start = tile_size * row
+        for j in range(len(local_coords[i])):
+            global_coords.append([c_start + local_coords[i][j, 0], r_start + local_coords[i][j, 1]])
+    if len(global_coords) == 0:
+        return None
+    else:
+        return np.array(global_coords)
+
+
+def cpec_coords_from_anc_v2(anc, num_of_columns, tile_size, half_res=False):
+    # anc is a list(2: anchor coords and classes) of a list of arrays (1 array per image tile)
+    # anc arrays are local coordinates for the tile
+    # convert tile coords to WSI coords
+    local_coords = []
+    for j in range(len(anc[0])):
+        if len(anc[0][j]) != 0:
+            y_coords = (anc[0][j][:, 2] + anc[0][j][:, 0]) / 2
+            x_coords = (anc[0][j][:, 3] + anc[0][j][:, 1]) / 2
+            local_coords.append(np.stack([x_coords, y_coords], axis=1))
+        else:
+            local_coords.append(anc[0][j])
+    wsi_coords = local_to_global_coords_retinanet_v2(local_coords, num_of_columns, tile_size)
+    if not half_res:
+        return wsi_coords
+    elif half_res:
+        return (wsi_coords * 2).astype(int)
+    else:
+        print('half_res parameter must be a boolean!')
+        return
+
+
+def retinanet_prediction_output(WSI, model, boundingbox, batch_size=1, im_size=512, half_res=True, normalize=True,
+                                per_channel=False):
+    # want to add path boolean and code load model if model is a filepath
+    output = model.predict(wsi_generator(WSI=WSI,
+                                         boundingbox=boundingbox,
+                                         batch_size=batch_size,
+                                         im_size=im_size,
+                                         half_res=half_res,
+                                         normalize=normalize,
+                                         per_channel=per_channel))
+    output_dic = {name: pred for name, pred in zip(model.output_names, output)}
+    return output_dic
+
+
+def wsi_cpec_generator(WSI, coords, batch_size=16, per_channel=False):
+    if type(WSI) is str:
+        wsi = openslide.open_slide(WSI)
+    else:
+        wsi = WSI
+    if len(coords) % batch_size == 0:
+        for i in range(len(coords) // batch_size):
+            start = i * batch_size
+            stop = start + batch_size
+            xbatch = per_sample_tile_normalization(
+                np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop]), axis=1), per_channel=per_channel)
+            yield xbatch
+    else:
+        for i in range((len(coords) // batch_size) + 1):
+            start = i * batch_size
+            if i == (len(coords) // batch_size):
+                xbatch = per_sample_tile_normalization(
+                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:]), axis=1), per_channel=per_channel)
+                yield xbatch
+            else:
+                stop = start + batch_size
+                xbatch = per_sample_tile_normalization(
+                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop]), axis=1),
+                    per_channel=per_channel)
+                yield xbatch
+
+
+def biondi_prevalence_and_coords(WSI,
+                                 retinanet,
+                                 classifier,
+                                 boundingbox,
+                                 batch_size=1,
+                                 im_size=512,
+                                 half_res=True,
+                                 normalize=True,
+                                 per_channel=False,
+                                 iou_nms=0.3):
+    if type(WSI) is str:
+        wsi = openslide.open_slide(WSI)
+    else:
+        wsi = WSI
+    dim = wsi.dimensions
+    if half_res:
+        tile_size = im_size // 2
+    else:
+        tile_size = im_size
+    coords = cpec_coords_from_anc_v2(boundingbox.convert_box_to_anc(retinanet_prediction_output(WSI=wsi,
+                                                                                                model=retinanet,
+                                                                                                boundingbox=boundingbox,
+                                                                                                batch_size=batch_size,
+                                                                                                im_size=im_size,
+                                                                                                half_res=half_res,
+                                                                                                normalize=normalize,
+                                                                                                per_channel=per_channel),
+                                                                    iou_nms=iou_nms,
+                                                                    apply_deltas=True),
+                                     dim[0] // im_size,
+                                     tile_size=tile_size,
+                                     half_res=half_res)
+    prediction_logits = classifier.predict(wsi_cpec_generator(wsi, coords))
+    affected_coords = biondi.statistics.sort_affected_coords_from_aipredictions(biondi.statistics.convert_probabilities_to_predictions(prediction_logits), coords)
+    prevalence = (len(affected_coords)/len(coords))*100
+    return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence}
