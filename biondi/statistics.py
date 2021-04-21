@@ -776,3 +776,8 @@ def plot_pca(data, pc, _3d=False, elev=None, azim=None, labels=False, legend=Tru
             ax.legend(targets, bbox_to_anchor=(1, 1), loc='upper left', ncol=1)
         ax.grid()
     return fig
+
+
+def find_overlapping_points(a, b, threshold):
+    Atree = KDTree(a)
+

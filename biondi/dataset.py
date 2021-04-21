@@ -1333,7 +1333,7 @@ def randomize_and_segregate_dataset_retinanet_dictionary(dictionary, validation_
     return training_dic, validation_dic, test_dic
 
 
-def retinanet_generator(data, batchsize=1, normalize=True, per_channel=False):
+def retinanet_generator(data, batchsize=1, normalize=True, per_channel=False, two_channel=False):
     i = 0
     keys = data.keys()
     while True:
@@ -1349,9 +1349,15 @@ def retinanet_generator(data, batchsize=1, normalize=True, per_channel=False):
         for key in keys:
             if 'dat' in key:
                 if normalize:
-                    xbatch[key] = per_sample_tile_normalization(data[key][start:stop], per_channel=per_channel)
+                    if two_channel:
+                        xbatch[key] = per_sample_tile_normalization(data[key][start:stop, ..., 1:3], per_channel=per_channel)
+                    else:
+                        xbatch[key] = per_sample_tile_normalization(data[key][start:stop], per_channel=per_channel)
                 else:
-                    xbatch[key] = data[key][start:stop]
+                    if two_channel:
+                        xbatch[key] = data[key][start:stop, ..., 1:3]
+                    else:
+                        xbatch[key] = data[key][start:stop]
             elif 'msk' in key:
                 xbatch[key] = data[key][start:stop]
             else:
@@ -1507,6 +1513,42 @@ def tile_sample_hdf5_generator(tile_stack_filename, sample_size=100, name=None):
     dset4 = f.create_dataset('full_randomized_tile_indices', data=p)
     print('Saved as:', full_filename)
     return
+
+
+def tile_sample_hdf5_generator_v2(wsi_filename, im_size=1024, sample_size=100, name=None):
+    if name:
+        wsi_name = name
+    else:
+        wsi_name = re.search('(^.*?) ', wsi_filename).group(1)
+    filename = wsi_name + '_tile_sample_'
+    previous_metadata = glob.glob(filename + '*.hdf5')
+    max_previous = max([int(re.search('sample_(.{1,2}?).hdf5', i).group(1)) for i in previous_metadata] + [0])
+    full_filename = filename + str(max_previous + 1) + '.hdf5'
+    wsi = openslide.open_slide(wsi_filename)
+    dim = wsi.dimensions
+    grid_height = dim[1] // im_size
+    grid_width = dim[0] // im_size
+    im_num = grid_height * grid_width
+    if max_previous == 0:
+        p = np.random.permutation(im_num)
+    else:
+        f_old = h5py.File(filename + '1.hdf5', 'r')
+        p = f_old['full_randomized_tile_indices']
+    tile_stack = []
+    for index in p[:sample_size * (max_previous + 1)]:
+        # determine row in WSI
+        i = index // grid_width
+        # determine column in WSI
+        j = index % grid_width
+        a = wsi.read_region((j * im_size, i * im_size), 0, (im_size, im_size))
+        tile_stack.append(np.array(a)[:, :, :-1])
+    f = h5py.File(full_filename, 'w')
+    dset1 = f.create_dataset('images', data=np.stack(tile_stack, axis=0))
+    dset2 = f.create_dataset('rows-columns', data=np.array([grid_height, grid_width]))
+    dset3 = f.create_dataset('tile_index', data=p[:sample_size * (max_previous + 1)])
+    dset4 = f.create_dataset('full_randomized_tile_indices', data=p)
+    print('Saved as:', full_filename)
+
 
 
 def unet_generator(imgs, masks, per_channel=False):
