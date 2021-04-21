@@ -1899,6 +1899,15 @@ def cpec_coords_from_anc_v2(anc, num_of_columns, tile_size, half_res=False):
 def retinanet_prediction_output(WSI, model, boundingbox, batch_size=1, im_size=512, half_res=True, normalize=True,
                                 per_channel=False, two_channel=True):
     # want to add path boolean and code load model if model is a filepath
+    if type(WSI) is str:
+        dim = openslide.open_slide(WSI).dimensions
+    else:
+        dim = WSI.dimensions
+    num_of_images = (dim[0] // im_size)*(dim[1] // im_size)
+    if num_of_images % batch_size != 0:
+        steps = (num_of_images // batch_size) + 1
+    else:
+        steps = num_of_images // batch_size
     output = model.predict(wsi_generator(WSI=WSI,
                                          boundingbox=boundingbox,
                                          batch_size=batch_size,
@@ -1906,7 +1915,8 @@ def retinanet_prediction_output(WSI, model, boundingbox, batch_size=1, im_size=5
                                          half_res=half_res,
                                          normalize=normalize,
                                          per_channel=per_channel,
-                                         two_channel=two_channel))
+                                         two_channel=two_channel),
+                           steps=steps)
     output_dic = {name: pred for name, pred in zip(model.output_names, output)}
     return output_dic
 
