@@ -606,8 +606,8 @@ def wsi_tile_extraction_v2(wsi_filename, im_size, sample_name, half_res=False):
     print('File saved as: ' + str(filename))
 
 
-def half_tile_resolution(im_size):
-    inputs = keras.Input(shape=(im_size, im_size, 3))
+def half_tile_resolution(im_size, channels=3):
+    inputs = keras.Input(shape=(im_size, im_size, channels))
     out = keras.layers.AveragePooling2D()(inputs)
     model = keras.Model(inputs=inputs, outputs=out)
     return model
@@ -1826,7 +1826,10 @@ def wsi_generator(WSI, boundingbox, batch_size=1, im_size=512, half_res=True, no
     counter = 0
     batch = []
     if half_res:
-        model = half_tile_resolution(im_size)
+        if two_channel:
+            model = half_tile_resolution(im_size, channels=2)
+        else:
+            model = half_tile_resolution(im_size)
     for i in range(dim[1] // im_size):
         for j in range(dim[0] // im_size):
             # j represent position on x-axis (different from usual which is row #)
