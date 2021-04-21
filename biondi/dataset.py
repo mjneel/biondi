@@ -1817,7 +1817,7 @@ def aggregate_retinanet_training_dictionaries(dicts):
     return aggregated_dictionary
 
 
-def wsi_generator(WSI, boundingbox, batch_size=1, im_size=512, half_res=True, normalize=True, per_channel=False):
+def wsi_generator(WSI, boundingbox, batch_size=1, im_size=512, half_res=True, normalize=True, per_channel=False, two_channel=False):
     if type(WSI) is str:
         wsi = openslide.open_slide(WSI)
     else:
@@ -1831,7 +1831,10 @@ def wsi_generator(WSI, boundingbox, batch_size=1, im_size=512, half_res=True, no
         for j in range(dim[0] // im_size):
             # j represent position on x-axis (different from usual which is row #)
             # i represent position on y-axis (different from usual which is column #)
-            batch.append(np.array(wsi.read_region((j * im_size, i * im_size), 0, (im_size, im_size)))[..., :-1])
+            if two_channel:
+                batch.append(np.array(wsi.read_region((j * im_size, i * im_size), 0, (im_size, im_size)))[..., 1:-1])
+            else:
+                batch.append(np.array(wsi.read_region((j * im_size, i * im_size), 0, (im_size, im_size)))[..., :-1])
             counter += 1
             if counter == batch_size:
                 images = np.array(batch)
@@ -1894,7 +1897,7 @@ def cpec_coords_from_anc_v2(anc, num_of_columns, tile_size, half_res=False):
 
 
 def retinanet_prediction_output(WSI, model, boundingbox, batch_size=1, im_size=512, half_res=True, normalize=True,
-                                per_channel=False):
+                                per_channel=False, two_channel=True):
     # want to add path boolean and code load model if model is a filepath
     output = model.predict(wsi_generator(WSI=WSI,
                                          boundingbox=boundingbox,
@@ -1902,7 +1905,8 @@ def retinanet_prediction_output(WSI, model, boundingbox, batch_size=1, im_size=5
                                          im_size=im_size,
                                          half_res=half_res,
                                          normalize=normalize,
-                                         per_channel=per_channel))
+                                         per_channel=per_channel,
+                                         two_channel=two_channel))
     output_dic = {name: pred for name, pred in zip(model.output_names, output)}
     return output_dic
 
@@ -1943,6 +1947,7 @@ def biondi_prevalence_and_coords(WSI,
                                  half_res=True,
                                  normalize=True,
                                  per_channel=False,
+                                 two_channel=True,
                                  iou_nms=0.3):
     if type(WSI) is str:
         wsi = openslide.open_slide(WSI)
@@ -1960,7 +1965,8 @@ def biondi_prevalence_and_coords(WSI,
                                                                                                 im_size=im_size,
                                                                                                 half_res=half_res,
                                                                                                 normalize=normalize,
-                                                                                                per_channel=per_channel),
+                                                                                                per_channel=per_channel,
+                                                                                                two_channel=two_channel),
                                                                     iou_nms=iou_nms,
                                                                     apply_deltas=True),
                                      dim[0] // im_size,
