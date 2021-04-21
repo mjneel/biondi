@@ -233,7 +233,7 @@ def load_wsi_coords_and_labels(coords_list, defined_label):
     return x, labels
 
 
-def wsi_cell_extraction_from_coords_v3(wsi_image_filename, im_size, coords):
+def wsi_cell_extraction_from_coords_v3(wsi_image_filename, im_size, coords, verbose=1):
     """
     Extracts cropped images at given coordinates from a larger image.
 
@@ -253,7 +253,8 @@ def wsi_cell_extraction_from_coords_v3(wsi_image_filename, im_size, coords):
         top_left_column = int(i[0] - (im_size / 2))
         cells.append(wsi.read_region((top_left_column, top_left_row), 0, (im_size, im_size)))
         counter += 1
-        print(counter, "out of", len(coords), "slices")
+        if verbose == 1:
+            print(counter, "out of", len(coords), "slices")
     cells = np.stack(cells, axis=0)
     cells = cells[:, :, :, :-1]
     return cells
@@ -1934,19 +1935,19 @@ def wsi_cpec_generator(WSI, coords, batch_size=16, per_channel=False):
             start = i * batch_size
             stop = start + batch_size
             xbatch = per_sample_tile_normalization(
-                np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop]), axis=1), per_channel=per_channel)
+                np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop], verbose=0), axis=1), per_channel=per_channel)
             yield xbatch
     else:
         for i in range((len(coords) // batch_size) + 1):
             start = i * batch_size
             if i == (len(coords) // batch_size):
                 xbatch = per_sample_tile_normalization(
-                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:]), axis=1), per_channel=per_channel)
+                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:], verbose=0), axis=1), per_channel=per_channel)
                 yield xbatch
             else:
                 stop = start + batch_size
                 xbatch = per_sample_tile_normalization(
-                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop]), axis=1),
+                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop], verbose=0), axis=1),
                     per_channel=per_channel)
                 yield xbatch
 
