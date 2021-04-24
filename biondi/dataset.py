@@ -1935,19 +1935,22 @@ def wsi_cpec_generator(WSI, coords, batch_size=16, per_channel=False):
             start = i * batch_size
             stop = start + batch_size
             xbatch = per_sample_tile_normalization(
-                np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop], verbose=0), axis=1), per_channel=per_channel)
+                np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop],
+                                                                  verbose=0), axis=1), per_channel=per_channel)
             yield xbatch
     else:
         for i in range((len(coords) // batch_size) + 1):
             start = i * batch_size
             if i == (len(coords) // batch_size):
                 xbatch = per_sample_tile_normalization(
-                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:], verbose=0), axis=1), per_channel=per_channel)
+                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:],
+                                                                      verbose=0), axis=1), per_channel=per_channel)
                 yield xbatch
             else:
                 stop = start + batch_size
                 xbatch = per_sample_tile_normalization(
-                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop], verbose=0), axis=1),
+                    np.expand_dims(wsi_cell_extraction_from_coords_v3(wsi, im_size=64, coords=coords[start:stop],
+                                                                      verbose=0), axis=1),
                     per_channel=per_channel)
                 yield xbatch
 
@@ -1987,6 +1990,91 @@ def biondi_prevalence_and_coords(WSI,
                                      tile_size=tile_size,
                                      half_res=half_res)
     prediction_logits = classifier.predict(wsi_cpec_generator(wsi, coords))
-    affected_coords = biondi.statistics.sort_affected_coords_from_aipredictions(biondi.statistics.convert_probabilities_to_predictions(prediction_logits), coords)
+    affected_coords = biondi.statistics.sort_affected_coords_from_aipredictions(
+        biondi.statistics.convert_probabilities_to_predictions(prediction_logits),
+        coords,
+    )
     prevalence = (len(affected_coords)/len(coords))*100
     return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence}
+
+
+class PredictionGenerator(keras.utils.Sequence):
+    def __init__(self,
+                 WSI,
+                 boundingbox,
+                 batch_size=1,
+                 im_size=512,
+                 half_res=True,
+                 normalize=True,
+                 per_channel=False,
+                 two_channel=True,
+                 prediction=False,
+                 retinanet=False,
+                 coords=None):
+        if type(WSI) is str:
+            self.wsi = openslide.open_slide(WSI)
+        else:
+            self.wsi = WSI
+        self.dim = self.wsi.dimensions
+        self.im_size = im_size
+        self.retinanet = retinanet
+        if self.retinanet:
+            self.tile_count = (self.dim[0] // self.im_size) * (self.dim[1] // self.im_size)
+        self.column_num = self.dim[0] // self.im_size
+        self.boundingbox = boundingbox
+        self.batch_size = batch_size
+        self.half_res = half_res
+        self.two_channel = two_channel
+        if self.half_res:
+            if self.two_channel:
+                self.downscale_model = biondi.dataset.half_tile_resolution(self.im_size, channels=2)
+            else:
+                self.downscale_model = biondi.dataset.half_tile_resolution(self.im_size)
+        self.normalize = normalize
+        self.per_channel = per_channel
+        if self.two_channel:
+            self.c_idx_start = 1
+        else:
+            self.c_idx_start = 0
+        self.prediction = prediction
+        self.coords = coords
+        self.on_epoch_end()
+
+    def __len__(self):
+        if self.retinanet:
+            return int(np.ceil(self.tile_count / self.batch_size))
+        else:
+            return int(np.ceil(len(self.coords) / self.batch_size))
+
+    def __getitem__(self, index):
+        batch = []
+        if self.retinanet:
+            for idx in self.indexes[index * self.batch_size:(index + 1) * self.batch_size]:
+                r = idx // self.column_num
+                c = idx % self.column_num
+                batch.append(
+                    np.array(self.wsi.read_region((c * self.im_size, r * self.im_size), 0, (self.im_size, self.im_size))
+                             )[..., self.c_idx_start:-1])
+            batch = np.stack(batch)
+        else:
+            batch_idx = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
+            batch = wsi_cell_extraction_from_coords_v3(self.wsi, im_size=64, coords=self.coords[batch_idx], verbose=0)
+        if self.half_res:
+            batch = self.downscale_model(batch.astype('float32'))
+        if self.normalize:
+            batch = biondi.dataset.per_sample_tile_normalization(batch, per_channel=self.per_channel)
+        if self.retinanet:
+            batch_dict = {'dat': np.expand_dims(batch, axis=1)}
+            for key in self.boundingbox.params['inputs_shapes'].keys():
+                if 'msk' in key:
+                    batch_dict[key] = np.zeros(
+                        shape=(self.batch_size,) + tuple(self.boundingbox.params['inputs_shapes'][key]))
+            return batch_dict
+        else:
+            return np.expand_dims(batch, axis=1)
+
+    def on_epoch_end(self):
+        if self.retinanet:
+            self.indexes = np.arange(self.tile_count)
+        else:
+            self.indexes = np.arange(len(self.coords))
