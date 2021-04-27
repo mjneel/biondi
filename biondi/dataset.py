@@ -7,6 +7,8 @@ import skimage
 import skimage.morphology
 import skimage.filters
 import skimage.transform
+import skimage.exposure
+import skimage.measure
 import scipy
 from scipy import ndimage
 import openslide
@@ -1818,7 +1820,14 @@ def aggregate_retinanet_training_dictionaries(dicts):
     return aggregated_dictionary
 
 
-def wsi_generator(WSI, boundingbox, batch_size=1, im_size=512, half_res=True, normalize=True, per_channel=False, two_channel=False):
+def wsi_generator(WSI,
+                  boundingbox,
+                  batch_size=1,
+                  im_size=512,
+                  half_res=True,
+                  normalize=True,
+                  per_channel=False,
+                  two_channel=False):
     if type(WSI) is str:
         wsi = openslide.open_slide(WSI)
     else:
@@ -1975,20 +1984,24 @@ def biondi_prevalence_and_coords(WSI,
         tile_size = im_size // 2
     else:
         tile_size = im_size
-    coords = cpec_coords_from_anc_v2(boundingbox.convert_box_to_anc(retinanet_prediction_output(WSI=wsi,
-                                                                                                model=retinanet,
-                                                                                                boundingbox=boundingbox,
-                                                                                                batch_size=batch_size,
-                                                                                                im_size=im_size,
-                                                                                                half_res=half_res,
-                                                                                                normalize=normalize,
-                                                                                                per_channel=per_channel,
-                                                                                                two_channel=two_channel),
-                                                                    iou_nms=iou_nms,
-                                                                    apply_deltas=True),
-                                     dim[0] // im_size,
-                                     tile_size=tile_size,
-                                     half_res=half_res)
+    coords = cpec_coords_from_anc_v2(
+        boundingbox.convert_box_to_anc(
+            retinanet_prediction_output(
+                WSI=wsi,
+                model=retinanet,
+                boundingbox=boundingbox,
+                batch_size=batch_size,
+                im_size=im_size,
+                half_res=half_res,
+                normalize=normalize,
+                per_channel=per_channel,
+                two_channel=two_channel),
+            iou_nms=iou_nms,
+            apply_deltas=True),
+        dim[0] // im_size,
+        tile_size=tile_size,
+        half_res=half_res
+    )
     prediction_logits = classifier.predict(wsi_cpec_generator(wsi, coords))
     affected_coords = biondi.statistics.sort_affected_coords_from_aipredictions(
         biondi.statistics.convert_probabilities_to_predictions(prediction_logits),
@@ -2078,3 +2091,264 @@ class PredictionGenerator(keras.utils.Sequence):
             self.indexes = np.arange(self.tile_count)
         else:
             self.indexes = np.arange(len(self.coords))
+
+
+def retinanet_prediction_output_v2(WSI, model, boundingbox):
+    # want to add path boolean and code load model if model is a filepath
+    output = model.predict(
+        PredictionGenerator(WSI, boundingbox, batch_size=8, retinanet=True),
+        verbose=1,
+        workers=8,
+        max_queue_size=64
+    )
+    output_dic = {name: pred for name, pred in zip(model.output_names, output)}
+    return output_dic
+
+
+def biondi_prevalence_and_coords_v2(WSI,
+                                    retinanet,
+                                    classifier,
+                                    boundingbox,
+                                    im_size=512,
+                                    half_res=True,
+                                    iou_nms=0.3):
+    if type(WSI) is str:
+        wsi = openslide.open_slide(WSI)
+    else:
+        wsi = WSI
+    dim = wsi.dimensions
+    if half_res:
+        tile_size = im_size // 2
+    else:
+        tile_size = im_size
+    coords = cpec_coords_from_anc_v2(
+        boundingbox.convert_box_to_anc(
+            retinanet_prediction_output_v2(
+                WSI=wsi,
+                model=retinanet,
+                boundingbox=boundingbox
+            ),
+            iou_nms=iou_nms,
+            apply_deltas=True),
+        dim[0] // im_size,
+        tile_size=tile_size,
+        half_res=half_res,
+    )
+    prediction_logits = classifier.predict(
+        PredictionGenerator(wsi, boundingbox, batch_size=32, half_res=False, retinanet=False, coords=coords),
+        verbose=1,
+        workers=8,
+        max_queue_size=64
+    )
+    affected_coords = biondi.statistics.sort_affected_coords_from_aipredictions(
+        biondi.statistics.convert_probabilities_to_predictions(prediction_logits),
+        coords,
+    )
+    prevalence = (len(affected_coords)/len(coords))*100
+    return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence}
+
+
+def random_adjust_brightness(x, b_delta, batch_size):
+    return np.clip(
+        ((x/255) + np.random.uniform(-b_delta, b_delta, size=(batch_size, 1, 1, 1, 1)))*255,
+        a_min=0,
+        a_max=255
+    )
+
+
+def random_adjust_contrast(x, c_factor_min, c_factor_max, batch_size):
+    mean = np.mean(x / 255, axis=(-3, -2), keepdims=True)
+    return np.clip(
+        (((x / 255) - mean) * np.random.uniform(c_factor_min, c_factor_max, size=(batch_size, 1, 1, 1, 1)) +
+         mean) * 255,
+        a_min=0,
+        a_max=255
+    )
+
+
+class TrainingGenerator(keras.utils.Sequence):
+    def __init__(self,
+                 data,
+                 batch_size,
+                 labels=None,
+                 normalize=True,
+                 per_channel=False,
+                 two_channel=False,
+                 retinanet=False,
+                 validation=False,
+                 augmentation=False,
+                 flip=False,
+                 rotation=False,
+                 rand_brightness=False,
+                 rand_contrast=False,
+                 simultaneous_aug=False,
+                 b_delta=0.95,
+                 c_factor_min=0.1,
+                 c_factor_max=0.9,):
+        self.retinanet = retinanet
+        self.batch_size = batch_size
+        self.normalize = normalize
+        self.per_channel = per_channel
+        self.two_channel = two_channel
+        self.validation = validation
+        self.augmentation = augmentation
+        self.flip = flip
+        self.rotation = rotation
+        self.rand_brightness = rand_brightness
+        self.rand_contrast = rand_contrast
+        self.simultaneous_aug = simultaneous_aug
+        self.b_delta = b_delta
+        self.c_factor_min = c_factor_min
+        self.c_factor_max = c_factor_max
+        if type(data) is str:
+            if '.pickle' in data:
+                with open(data, 'rb') as handle:
+                    self.data = pickle.load(handle)
+            elif '.npy' in data:
+                self.data = np.expand_dims(np.load(data), axis=1)
+            else:
+                print('Warning: Filetype is not recognized. Only ".pickle" and ".npy" filetypes are supported.')
+                return
+        else:
+            if self.retinanet:
+                self.data = data
+            else:
+                self.data = np.expand_dims(data, axis=1)
+        if self.retinanet:
+            self.sample_number = len(self.data['dat'])
+            self.keys = self.data.keys()
+        else:
+            self.sample_number = len(self.data)
+            if labels:
+                if type(labels) is str:
+                    self.labels = np.load(labels)
+                else:
+                    self.labels = labels
+            else:
+                print('Warning: Must provide labels!')
+                return
+        if self.two_channel:
+            self.c_idx_start = 1
+        else:
+            self.c_idx_start = 0
+        self.on_epoch_end()
+
+    def __len__(self):
+        return int(np.ceil(self.sample_number / self.batch_size))
+
+    def __getitem__(self, index):
+        batch_idx = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
+        if self.retinanet:
+            x_batch = {}
+            y_batch = {}
+            for key in self.keys:
+                if 'dat' in key:
+                    if self.rand_contrast and self.rand_brightness:
+                        if self.simultaneous_aug:
+                            x_batch[key] = random_adjust_brightness(
+                                self.data[key][batch_idx, ..., self.c_idx_start:],
+                                b_delta=self.b_delta,
+                                batch_size=self.batch_size
+                            )
+                            x_batch[key] = random_adjust_contrast(
+                                x_batch[key],
+                                c_factor_min=self.c_factor_min,
+                                c_factor_max=self.c_factor_max,
+                                batch_size=self.batch_size
+                            )
+                        else:
+                            rand_bools = np.random.choice([False, True], size=self.batch_size)
+                            x_batch[key] = self.data[key][batch_idx, ..., self.c_idx_start:].astype('float32')
+                            for i, j in enumerate(rand_bools):
+                                if j:
+                                    x_batch[key][i:i+1] = random_adjust_contrast(
+                                        x_batch[key][i:i+1],
+                                        c_factor_min=self.c_factor_min,
+                                        c_factor_max=self.c_factor_max,
+                                        batch_size=1
+                                    )
+                                else:
+                                    x_batch[key][i:i+1] = random_adjust_brightness(
+                                        x_batch[key][i:i+1],
+                                        b_delta=self.b_delta,
+                                        batch_size=1
+                                    )
+                    elif self.rand_brightness:
+                        x_batch[key] = random_adjust_brightness(
+                            self.data[key][batch_idx, ..., self.c_idx_start:],
+                            b_delta=self.b_delta,
+                            batch_size=self.batch_size
+                        )
+                    elif self.rand_contrast:
+                        x_batch[key] = random_adjust_contrast(
+                            self.data[key][batch_idx, ..., self.c_idx_start:],
+                            c_factor_min=self.c_factor_min,
+                            c_factor_max=self.c_factor_max,
+                            batch_size=self.batch_size
+                        )
+                    else:
+                        x_batch[key] = self.data[key][batch_idx, ..., self.c_idx_start:]
+                    if self.normalize:
+                        x_batch[key] = per_sample_tile_normalization(x_batch[key], per_channel=self.per_channel)
+                elif 'msk' in key:
+                    x_batch[key] = self.data[key][batch_idx]
+                else:
+                    y_batch[key] = self.data[key][batch_idx]
+            return x_batch, y_batch
+        else:
+            if self.rand_contrast and self.rand_brightness:
+                if self.simultaneous_aug:
+                    x_batch = random_adjust_brightness(
+                        self.data[batch_idx, ..., self.c_idx_start:],
+                        b_delta=self.b_delta,
+                        batch_size=self.batch_size
+                    )
+                    x_batch = random_adjust_contrast(
+                        x_batch,
+                        c_factor_min=self.c_factor_min,
+                        c_factor_max=self.c_factor_max,
+                        batch_size=self.batch_size
+                    )
+                else:
+                    rand_bools = np.random.choice([False, True], size=self.batch_size)
+                    x_batch = self.data[batch_idx, ..., self.c_idx_start:].astype('float32')
+                    for i, j in enumerate(rand_bools):
+                        if j:
+                            x_batch[i:i+1] = random_adjust_contrast(
+                                x_batch[i:i+1],
+                                c_factor_min=self.c_factor_min,
+                                c_factor_max=self.c_factor_max,
+                                batch_size=1
+                            )
+                        else:
+                            x_batch[i:i+1] = random_adjust_brightness(
+                                x_batch[i:i+1],
+                                b_delta=self.b_delta,
+                                batch_size=1
+                            )
+            elif self.rand_brightness:
+                x_batch = random_adjust_brightness(
+                    self.data[batch_idx, ..., self.c_idx_start:],
+                    b_delta=self.b_delta,
+                    batch_size=self.batch_size
+                )
+            elif self.rand_contrast:
+                x_batch = random_adjust_contrast(
+                    self.data[batch_idx, ..., self.c_idx_start:],
+                    c_factor_min=self.c_factor_min,
+                    c_factor_max=self.c_factor_max,
+                    batch_size=self.batch_size
+                )
+            else:
+                x_batch = self.data[batch_idx, ..., self.c_idx_start:]
+            if self.normalize:
+                x_batch = per_sample_tile_normalization(x_batch, per_channel=self.per_channel)
+            y_batch = self.labels[batch_idx]
+            return x_batch, y_batch
+
+    def on_epoch_end(self):
+        if self. validation:
+            self.indexes = np.arange(self.sample_number)
+        else:
+            self.indexes = np.random.permutation(self.sample_number)
+
