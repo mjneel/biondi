@@ -989,6 +989,7 @@ def convert_anc_to_box(anc_params, boundingbox, cls_key='cls-c4', cls_mask_key='
 
 def per_sample_tile_normalization(sorted_tiles, per_channel=False):
     """Per sample tile normalization. Channels are normalized individually."""
+    # per_channel option will raise runtime warning if np.std contains zeros, but should be ok to use
     if per_channel:
         images = []
         for i in range(len(sorted_tiles)):
@@ -996,6 +997,7 @@ def per_sample_tile_normalization(sorted_tiles, per_channel=False):
             sample = sorted_tiles[i]
             image = (sample - np.mean(sample, axis=tuple(range(sample.ndim - 1)))) / np.std(sample, axis=tuple(
                 range(sample.ndim - 1)))
+            image[np.isinf(image)] = 0.0
             images.append(image)
         images = np.array(images)
         return images
@@ -1004,7 +1006,11 @@ def per_sample_tile_normalization(sorted_tiles, per_channel=False):
         for i in range(len(sorted_tiles)):
             # print(i + 1, 'out of', len(sorted_tiles))
             sample = sorted_tiles[i]
-            image = (sample - np.mean(sample)) / np.std(sample)
+            std = np.std(sample)
+            if std == 0:
+                image = np.zeros(sample.shape, dtype=np.float32)
+            else:
+                image = (sample - np.mean(sample)) / std
             images.append(image)
         images = np.array(images)
         return images
@@ -1374,8 +1380,12 @@ def retinanet_generator(data, batchsize=1, normalize=True, per_channel=False, tw
         yield xbatch, ybatch
 
 
-def retinanet_eval_generator(data, batchsize=1, normalize=True, per_channel=False):
+def retinanet_eval_generator(data, batchsize=1, normalize=True, per_channel=False, two_channel=True):
     full_steps = (len(data['dat']) // batchsize)
+    if two_channel:
+        c_start_idx = 1
+    else:
+        c_start_idx = 0
     if len(data['dat']) % batchsize != 0:
         partial_step = 1
     else:
@@ -1391,9 +1401,9 @@ def retinanet_eval_generator(data, batchsize=1, normalize=True, per_channel=Fals
         for key in keys:
             if 'dat' in key:
                 if normalize:
-                    xbatch[key] = per_sample_tile_normalization(data[key][start:stop], per_channel=per_channel)
+                    xbatch[key] = per_sample_tile_normalization(data[key][start:stop, ..., c_start_idx:], per_channel=per_channel)
                 else:
-                    xbatch[key] = data[key][start:stop]
+                    xbatch[key] = data[key][start:stop, ..., c_start_idx:]
             elif 'msk' in key:
                 xbatch[key] = data[key][start:stop]
             else:
@@ -2111,7 +2121,8 @@ def biondi_prevalence_and_coords_v2(WSI,
                                     boundingbox,
                                     im_size=512,
                                     half_res=True,
-                                    iou_nms=0.3):
+                                    iou_nms=0.3,
+                                    return_predictions=False):
     if type(WSI) is str:
         wsi = openslide.open_slide(WSI)
     else:
@@ -2140,17 +2151,21 @@ def biondi_prevalence_and_coords_v2(WSI,
         workers=8,
         max_queue_size=64
     )
+    predictions = biondi.statistics.convert_probabilities_to_predictions(prediction_logits)
     affected_coords = biondi.statistics.sort_affected_coords_from_aipredictions(
-        biondi.statistics.convert_probabilities_to_predictions(prediction_logits),
+        predictions,
         coords,
     )
     prevalence = (len(affected_coords)/len(coords))*100
-    return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence}
+    if return_predictions:
+        return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence, 'predictions': predictions, }
+    else:
+        return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence}
 
 
 def random_adjust_brightness(x, b_delta, batch_size):
     return np.clip(
-        ((x/255) + np.random.uniform(-b_delta, b_delta, size=(batch_size, 1, 1, 1, 1)))*255,
+        ((x / 255) + np.random.uniform(-b_delta, b_delta, size=(batch_size, 1, 1, 1, 1)))*255,
         a_min=0,
         a_max=255
     )
@@ -2248,13 +2263,13 @@ class TrainingGenerator(keras.utils.Sequence):
                             x_batch[key] = random_adjust_brightness(
                                 self.data[key][batch_idx, ..., self.c_idx_start:],
                                 b_delta=self.b_delta,
-                                batch_size=self.batch_size
+                                batch_size=len(batch_idx)
                             )
                             x_batch[key] = random_adjust_contrast(
                                 x_batch[key],
                                 c_factor_min=self.c_factor_min,
                                 c_factor_max=self.c_factor_max,
-                                batch_size=self.batch_size
+                                batch_size=len(batch_idx)
                             )
                         else:
                             rand_bools = np.random.choice([False, True], size=self.batch_size)
@@ -2277,14 +2292,14 @@ class TrainingGenerator(keras.utils.Sequence):
                         x_batch[key] = random_adjust_brightness(
                             self.data[key][batch_idx, ..., self.c_idx_start:],
                             b_delta=self.b_delta,
-                            batch_size=self.batch_size
+                            batch_size=len(batch_idx)
                         )
                     elif self.rand_contrast:
                         x_batch[key] = random_adjust_contrast(
                             self.data[key][batch_idx, ..., self.c_idx_start:],
                             c_factor_min=self.c_factor_min,
                             c_factor_max=self.c_factor_max,
-                            batch_size=self.batch_size
+                            batch_size=len(batch_idx)
                         )
                     else:
                         x_batch[key] = self.data[key][batch_idx, ..., self.c_idx_start:]
@@ -2301,13 +2316,13 @@ class TrainingGenerator(keras.utils.Sequence):
                     x_batch = random_adjust_brightness(
                         self.data[batch_idx, ..., self.c_idx_start:],
                         b_delta=self.b_delta,
-                        batch_size=self.batch_size
+                        batch_size=len(batch_idx)
                     )
                     x_batch = random_adjust_contrast(
                         x_batch,
                         c_factor_min=self.c_factor_min,
                         c_factor_max=self.c_factor_max,
-                        batch_size=self.batch_size
+                        batch_size=len(batch_idx)
                     )
                 else:
                     rand_bools = np.random.choice([False, True], size=self.batch_size)
@@ -2330,14 +2345,14 @@ class TrainingGenerator(keras.utils.Sequence):
                 x_batch = random_adjust_brightness(
                     self.data[batch_idx, ..., self.c_idx_start:],
                     b_delta=self.b_delta,
-                    batch_size=self.batch_size
+                    batch_size=len(batch_idx)
                 )
             elif self.rand_contrast:
                 x_batch = random_adjust_contrast(
                     self.data[batch_idx, ..., self.c_idx_start:],
                     c_factor_min=self.c_factor_min,
                     c_factor_max=self.c_factor_max,
-                    batch_size=self.batch_size
+                    batch_size=len(batch_idx)
                 )
             else:
                 x_batch = self.data[batch_idx, ..., self.c_idx_start:]
@@ -2350,5 +2365,7 @@ class TrainingGenerator(keras.utils.Sequence):
         if self. validation:
             self.indexes = np.arange(self.sample_number)
         else:
-            self.indexes = np.random.permutation(self.sample_number)
+            # not necessary since keras shuffles the index it gives __getitem__()
+            # self.indexes = np.random.permutation(self.sample_number)
+            self.indexes = np.arange(self.sample_number)
 
