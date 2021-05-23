@@ -926,22 +926,22 @@ def anc_params_from_tiles(tiles, coords, wsi_tiles_filename, bbox_size=64, tile_
         c_stop = c_start + tile_size
         r_start = tile_size * row
         r_stop = r_start + tile_size
+        # TODO: reconsider print output
         print(i + 1, 'out of', len(tiles), '---', c_start, c_stop, r_start, r_stop)
-
-        for j in range(len(coords)):
-            if c_start <= coords[j, 0] < c_stop and r_start <= coords[j, 1] < r_stop:
-                x = int(bbox_size / 2)
-                y0 = int(round(coords[j, 1] - r_start) - x)
-                y1 = int(round(coords[j, 1] - r_start) + x)
-                x0 = int(round(coords[j, 0] - c_start) - x)
-                x1 = int(round(coords[j, 0] - c_start) + x)
-                params = np.asarray([[y0, x0, y1, x1]])
-                print('--', params, coords[j], (params < 1024).sum() + (0 <= params).sum() == 8)
-                if (params < 1024).sum() + (0 <= params).sum() == 8:
-                    tile_bbox_param.append(params)
-        if len(tile_bbox_param) != 0:
-            tile_bbox_param = np.concatenate(tile_bbox_param, axis=0)
-            anc_params.append(tile_bbox_param)
+        tile_coords = coords[((c_start <= coords[:, 0]) & (coords[:, 0] < c_stop)) & ((r_start <= coords[:, 1]) & (coords[:, 1] < r_stop))]
+        x = int(bbox_size / 2)
+        y0 = (tile_coords[:, 1] - r_start) - x
+        y1 = (tile_coords[:, 1] - r_start) + x
+        x0 = (tile_coords[:, 0] - c_start) - x
+        x1 = (tile_coords[:, 0] - c_start) + x
+        tile_coords = np.stack([y0, x0, y1, x1], axis=1)
+        if len(tile_coords) != 0:
+            # TODO: Implement dynamic tilesizes for param comparisons
+            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < 1024), axis=1)]
+            if len(tile_coords) != 0:
+                anc_params.append(tile_coords)
+            else:
+                anc_params.append('None')
         else:
             anc_params.append('None')
     return anc_params
