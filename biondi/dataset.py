@@ -926,7 +926,7 @@ def anc_params_from_tiles(tiles, coords, wsi_tiles_filename, bbox_size=64, tile_
         c_stop = c_start + tile_size
         r_start = tile_size * row
         r_stop = r_start + tile_size
-        # TODO: reconsider print output
+        # TODO: reconsider print output, message rate will likely be too fast
         print(i + 1, 'out of', len(tiles), '---', c_start, c_stop, r_start, r_stop)
         tile_coords = coords[((c_start <= coords[:, 0]) & (coords[:, 0] < c_stop)) & ((r_start <= coords[:, 1]) & (coords[:, 1] < r_stop))]
         x = int(bbox_size / 2)
@@ -1098,7 +1098,6 @@ def convert_anc_to_box_v2_2d(anc_params, boundingbox):
         boxes[h] = []
     print('Converting extracted anchors to box parameters.')
     for i in range(len(anc_params)):
-        print(i + 1, 'out of', len(anc_params))
         box = boundingbox.convert_anc_to_box(anc_params[i], np.ones((anc_params[i].shape[0], 1)))
         for j in box.keys():
             boxes[j].append(box[j])
@@ -1146,7 +1145,6 @@ def normalized_tiles_and_bbox_params_from_wsi_tiles_v2(wsi_tiles_filename, coord
     sorted_anc = []
     print('Removing tiles without bounding boxes.')
     for i in range(len(anc)):
-        print(i + 1, 'out of', len(anc))
         if anc[i] != 'None':
             sorted_tiles.append(tiles[i])
             sorted_anc.append((anc[i]))
