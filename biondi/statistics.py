@@ -510,7 +510,7 @@ def plot_xy_hist(total_cpec_coords, percentage_affected, xy_savefile,
 
         # local percent affected heatmap
         fig, ax = plt.subplots()
-        ax.scatter(x, y, c=z, vmin=0, vmax=1,cmap='inferno', s=100, marker=".", edgecolor='')
+        ax.scatter(x, y, c=z, vmin=0, vmax=1,cmap='inferno', s=100, marker=".", edgecolor=None)
         plt.axis('scaled')
         if not axes:
             plt.axis('off')
