@@ -24,7 +24,9 @@ import pickle
 
 
 def load_tif(tif_file):
+    # TODO: adjust code to load channels last regardles of skimage or imageio version
     """
+    Warning: only use with skimage 0.15.x and imageio 2.6.1, newer versions of imageio load the image incorrectly.
     Returns array of a .tif image.
 
     Keyword arguments:
@@ -134,7 +136,9 @@ def pad_to_64(cropped_shape, cropped_image):
 
 
 def extract_padded_cropped_inclusions(mask_file, image_file, save_file, pad=5):
+    # TODO: adjust code to load channels last regardles of skimage or imageio version
     """
+    Warning: only use with skimage 0.15.x and imageio 2.6.1, newer versions of imageio load the image incorrectly.
     Extracts images of individual objects based on a binary mask.
 
     :param mask_file: filename of mask image
@@ -1551,7 +1555,7 @@ def tile_sample_hdf5_generator_v2(wsi_filename, im_size=1024, sample_size=100, n
         f_old = h5py.File(filename + '1.hdf5', 'r')
         p = f_old['full_randomized_tile_indices']
     tile_stack = []
-    for index in p[:sample_size * (max_previous + 1)]:
+    for index in p[:int(sample_size * (max_previous + 1))]:
         # determine row in WSI
         i = index // grid_width
         # determine column in WSI
