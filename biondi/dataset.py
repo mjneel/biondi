@@ -2371,3 +2371,20 @@ class TrainingGenerator(keras.utils.Sequence):
             # self.indexes = np.random.permutation(self.sample_number)
             self.indexes = np.arange(self.sample_number)
 
+
+def zstack_to_npy(filepaths, dst=''):
+    """
+    Loads and converts Tif z-stacks into npy files. Typical ztack channel order is  blue-green-red so channels are
+    reversed to match RGB order. Function intended to generate npy files for the biondi 3d box annotation client, which
+    does not need the blue channel. By default the blue channel is replace with zeros, but can be disabled.
+    :param filepaths: List of file paths; recommended to use full path names
+    :type filepaths: List of strings
+    :param dst: save folder file path; should end with '/'
+    :type dst: string
+    :return:
+    :rtype:
+    """
+    for i in filepaths:
+        image = skimage.io.imread(i)
+        image[..., 0] = 0
+        np.save(dst + os.path.basename(i)[:-4] + '.npy', image[..., ::-1])
