@@ -21,6 +21,7 @@ import h5py
 import pandas as pd
 import biondi.statistics
 import pickle
+import math
 
 
 def load_tif(tif_file):
@@ -1570,6 +1571,53 @@ def tile_sample_hdf5_generator_v2(wsi_filename, im_size=1024, sample_size=100, n
     print('Saved as:', full_filename)
 
 
+def tile_sample_hdf5_generator_v3(wsi_filename, im_size=1024, sample_size=100, name=None, half_res=False, save_path=None, sample_num=None):
+    if name:
+        if name == 'HE':
+            wsi_name = re.search('(^.*?) ', os.path.basename(wsi_filename)).group(1) + '_H&E'
+            if half_res:
+                wsi_name = wsi_name + '_20x'
+        else:
+            wsi_name = name
+    else:
+        wsi_name = re.search('(^.*?) ', os.path.basename(wsi_filename)).group(1)
+    filename = wsi_name + '_tile_sample_'
+    if save_path:
+        sp = save_path
+    else:
+        sp = ''
+    previous_metadata = glob.glob(sp + filename + '*.hdf5')
+    max_previous = max([int(re.search('sample_(.{1,2}?).hdf5', i).group(1)) for i in previous_metadata] + [0])
+    full_filename = sp + filename + str(sample_num or max_previous + 1) + '.hdf5'
+    wsi = openslide.open_slide(wsi_filename)
+    dim = wsi.dimensions
+    grid_height = dim[1] // im_size
+    grid_width = dim[0] // im_size
+    im_num = grid_height * grid_width
+    if max_previous == 0:
+        p = np.random.permutation(im_num)
+    else:
+        f_old = h5py.File(filename + '1.hdf5', 'r')
+        p = f_old['full_randomized_tile_indices']
+    tile_stack = []
+    for index in p[:sample_size * (sample_num or max_previous + 1)]:
+        # determine row in WSI
+        i = index // grid_width
+        # determine column in WSI
+        j = index % grid_width
+        a = wsi.read_region((j * im_size, i * im_size), 0, (im_size, im_size))
+        tile_stack.append(np.array(a)[:, :, :-1])
+    tile_stack = np.stack(tile_stack, axis=0)
+    model = biondi.dataset.half_tile_resolution(im_size)
+    tile_stack = model.predict(tile_stack)
+    f = h5py.File(full_filename, 'w')
+    dset1 = f.create_dataset('images', data=tile_stack.astype('uint8'))
+    dset2 = f.create_dataset('rows-columns', data=np.array([grid_height, grid_width]))
+    dset3 = f.create_dataset('tile_index', data=p[:sample_size * (sample_num or max_previous + 1)])
+    dset4 = f.create_dataset('full_randomized_tile_indices', data=p)
+    print('Saved as:', full_filename)
+
+
 def unet_generator(imgs, masks, per_channel=False):
     i = 0
     names = list(imgs.keys())
@@ -2024,6 +2072,7 @@ def biondi_prevalence_and_coords(WSI,
 
 
 class PredictionGenerator(keras.utils.Sequence):
+    #TODO: add compatibility with vacuole 40x HE images. such as downscale factor and such
     def __init__(self,
                  WSI,
                  boundingbox,
@@ -2388,3 +2437,102 @@ def zstack_to_npy(filepaths, dst=''):
         image = skimage.io.imread(i)
         image[..., 0] = 0
         np.save(dst + os.path.basename(i)[:-4] + '.npy', image[..., ::-1])
+
+def anc_params_from_wsi(WSI, coords, bbox_size=128, tile_size=1024, downscale_factor=1, verbose=True):
+    anc_params = []
+    dim = WSI.dimensions
+    grid_height = dim[1] // tile_size
+    grid_width = dim[0] // tile_size
+    max_tiles = grid_width * grid_height
+    scaled_coords = (coords/downscale_factor).astype(int)
+    print('Extracting bounding boxes.')
+    for i in range(max_tiles):
+        tile_bbox_param = []
+        # get coords of image
+        column = i % grid_width
+        row = i // grid_width
+        # pixel range
+        c_start = int(tile_size / downscale_factor) * column
+        c_stop = c_start + int(tile_size / downscale_factor)
+        r_start = int(tile_size / downscale_factor) * row
+        r_stop = r_start + int(tile_size / downscale_factor)
+        # TODO: reconsider print output, message rate will likely be too fast
+        print(i + 1, 'out of', max_tiles, '---', c_start, c_stop, r_start, r_stop)
+        tile_coords = scaled_coords[((c_start <= scaled_coords[:, 0]) & (scaled_coords[:, 0] < c_stop)) & (
+                (r_start <= scaled_coords[:, 1]) & (scaled_coords[:, 1] < r_stop))]
+        x = int((bbox_size / downscale_factor) / 2)
+        y0 = (tile_coords[:, 1] - r_start) - x
+        y1 = (tile_coords[:, 1] - r_start) + x
+        x0 = (tile_coords[:, 0] - c_start) - x
+        x1 = (tile_coords[:, 0] - c_start) + x
+        tile_coords = np.stack([y0, x0, y1, x1], axis=1)
+        if len(tile_coords) != 0:
+            # TODO: Implement dynamic tilesizes for param comparisons
+            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < 1024), axis=1)]
+            if len(tile_coords) != 0:
+                anc_params.append(tile_coords)
+            else:
+                anc_params.append('None')
+        else:
+            anc_params.append('None')
+    return anc_params
+
+
+def normalized_tiles_and_bbox_params_from_wsi(WSI, coords, boundingbox, normalize=False,
+                                                       bbox_size=128, tile_size=1024, per_channel=False, downscale_factor=1):
+    dim = WSI.dimensions
+    grid_height = dim[1] // tile_size
+    grid_width = dim[0] // tile_size
+    anc = anc_params_from_wsi(WSI, coords=coords, bbox_size=bbox_size,
+                              tile_size=tile_size, downscale_factor=downscale_factor)
+    sorted_tiles = []
+    sorted_anc = []
+    print('Removing tiles without bounding boxes.')
+    for i in range(len(anc)):
+        if anc[i] != 'None':
+            sorted_tiles.append(i)
+            sorted_anc.append((anc[i]))
+    im_boxes = convert_anc_to_box_v2_2d(sorted_anc, boundingbox)
+    batch = []
+    for i in sorted_tiles:
+        r = i // grid_width
+        c = i % grid_width
+        batch.append(
+            np.array(WSI.read_region((c * tile_size, r * tile_size), 0, (tile_size, tile_size)))[...,:-1])
+    batch = np.stack(batch)
+    if downscale_factor != 1:
+        model = downsample(im_size=tile_size, downsample_factor=downscale_factor)
+        batch = model.predict(batch)
+    if normalize:
+        images = per_sample_tile_normalization(batch, per_channel=per_channel)
+    else:
+        images = batch
+    return images, im_boxes
+
+
+def get_retinanet_training_dictionary_from_wsi(wsi_filename, coords, boundingbox, normalize=False,
+                                                  bbox_size=128, tile_size=1024, downscale_factor=1):
+    if type(wsi_filename) is str:
+        WSI = openslide.OpenSlide(wsi_filename)
+    else:
+        WSI = wsi_filename
+    tiles, boxes = normalized_tiles_and_bbox_params_from_wsi(
+        WSI,
+        coords,
+        boundingbox,
+        normalize=normalize,
+        bbox_size=bbox_size,
+        tile_size=tile_size,
+        downscale_factor=downscale_factor
+    )
+    boxes['dat'] = tiles
+    for key in boxes.keys():
+        boxes[key] = np.expand_dims(boxes[key], axis=1)
+    return boxes
+
+
+def downsample(im_size, downsample_factor=2, channels=3):
+    inputs = keras.Input(shape=(im_size, im_size, channels))
+    out = keras.layers.AveragePooling2D(pool_size=downsample_factor)(inputs)
+    model = keras.Model(inputs=inputs, outputs=out)
+    return model
