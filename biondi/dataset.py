@@ -1597,7 +1597,7 @@ def tile_sample_hdf5_generator_v3(wsi_filename, im_size=1024, sample_size=100, n
     if max_previous == 0:
         p = np.random.permutation(im_num)
     else:
-        f_old = h5py.File(filename + '1.hdf5', 'r')
+        f_old = h5py.File(sp + filename + '1.hdf5', 'r')
         p = f_old['full_randomized_tile_indices']
     tile_stack = []
     for index in p[:sample_size * (sample_num or max_previous + 1)]:
