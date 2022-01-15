@@ -208,6 +208,7 @@ def softmax(logits, axis=-1):
 #
 def roc_pr_curves(probabilities, labels, roc=True, pr=True,
                   from_logits=True):
+    # TODO: current requires one-hot encoding. change this to make it optional
     """
     Returns Receiver operating characteristic (ROC) and precision-recall
     (PR) curves.
