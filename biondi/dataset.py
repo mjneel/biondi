@@ -294,6 +294,7 @@ def replace_w_b(x):
     return x
 
 
+# noinspection PyUnboundLocalVariable
 def extract_im_and_labels_from_image(list_of_annotation_files, image_filename, im_size=64, from_mosaic=True):
     """
     Extracts cropped images and labels from a larger image (image mosaic
@@ -767,6 +768,7 @@ def data_augmentation(inputs, labels, iterations, dimensions, rotation=True, fli
     return augmented_data, augmented_data_labels
 
 
+# noinspection PyTypeChecker
 def annotation_tool(name, filename, x):
     # May remove the follow if statement. Maybe not worth trying to recover a interrupted run (y).
     #
@@ -807,6 +809,7 @@ def annotation_tool(name, filename, x):
             if answer2 == "y":
                 y = (np.load(save_list[0]))
                 y = y.tolist()
+                # noinspection PyTypeChecker
                 j = len(y)
             elif answer2 == "n":
                 y = []
@@ -816,6 +819,7 @@ def annotation_tool(name, filename, x):
     else:
         y = []
         j = 0
+    # noinspection PyUnboundLocalVariable
     while j < len(x):
         fig = pylab.figure()
         default_size = fig.get_size_inches()
@@ -841,6 +845,7 @@ def annotation_tool(name, filename, x):
         while answer not in ("y", "n", "u", "s", "ss"):
             answer = input("Is this an inclusion? y(yes), n(no), u(undo prev), s(save), ss(save and stop)")
             if answer == "y":
+                # noinspection PyUnboundLocalVariable
                 y.append(1)
                 j = j + 1
             elif answer == "n":
@@ -933,17 +938,55 @@ def anc_params_from_tiles(tiles, coords, wsi_tiles_filename, bbox_size=64, tile_
         r_start = tile_size * row
         r_stop = r_start + tile_size
         # TODO: reconsider print output, message rate will likely be too fast
-        print(i + 1, 'out of', len(tiles), '---', c_start, c_stop, r_start, r_stop)
-        tile_coords = coords[((c_start <= coords[:, 0]) & (coords[:, 0] < c_stop)) & ((r_start <= coords[:, 1]) & (coords[:, 1] < r_stop))]
+        print(f'Extracting bounding boxes: {i + 1} out of {len(tiles)}', end='      \r', flush=True)
+        for j in range(len(coords)):
+            if c_start <= coords[j, 0] < c_stop and r_start <= coords[j, 1] < r_stop:
+                x = int(bbox_size / 2)
+                y0 = int(round(coords[j, 1] - r_start) - x)
+                y1 = int(round(coords[j, 1] - r_start) + x)
+                x0 = int(round(coords[j, 0] - c_start) - x)
+                x1 = int(round(coords[j, 0] - c_start) + x)
+                params = np.asarray([[y0, x0, y1, x1]])
+                # print('--', params, coords[j], (params < 1024).sum() + (0 <= params).sum() == 8)
+                # TODO: may need to implement dynamic tile_sizes
+                if (params < 1024).sum() + (0 <= params).sum() == 8:
+                    tile_bbox_param.append(params)
+        if len(tile_bbox_param) != 0:
+            tile_bbox_param = np.concatenate(tile_bbox_param, axis=0)
+            anc_params.append(tile_bbox_param)
+        else:
+            anc_params.append('None')
+    return anc_params
+
+
+def anc_params_from_tiles_v2(tiles, coords, wsi_tiles_filename, bbox_size=64, tile_size=1024):
+    anc_params = []
+    num_of_columns = int(re.search('rows_(.+?)columns.npy', wsi_tiles_filename).group(1))
+    print('Extracting bounding boxes.')
+    for i in range(len(tiles)):
+        tile_bbox_param = []
+        # get coords of image
+        column = i % num_of_columns
+        row = i // num_of_columns
+        # pixel range
+        c_start = tile_size * column
+        c_stop = c_start + tile_size
+        r_start = tile_size * row
+        r_stop = r_start + tile_size
+        print(f'Extracting bounding boxes: {i + 1} out of {len(tiles)}',end='      \r', flush=True)
+
+        # ((c_start <= coords[:,0]) & (coords[:,0] < c_stop)) & ((r_start <= coords[:,1]) & (coords[:,1] < r_stop))
+        tile_coords = coords[((c_start <= coords[:,0]) & (coords[:,0] < c_stop)) & ((r_start <= coords[:,1]) & (coords[:,1] < r_stop))]
         x = int(bbox_size / 2)
         y0 = (tile_coords[:, 1] - r_start) - x
         y1 = (tile_coords[:, 1] - r_start) + x
         x0 = (tile_coords[:, 0] - c_start) - x
         x1 = (tile_coords[:, 0] - c_start) + x
         tile_coords = np.stack([y0, x0, y1, x1], axis=1)
+        # (0 <= tile_coords) & (tile_coords < 1024)
         if len(tile_coords) != 0:
-            # TODO: Implement dynamic tilesizes for param comparisons
-            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < 1024), axis=1)]
+            # TODO: need to implement dynamic tile_sizes
+            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < 1024),axis=1)]
             if len(tile_coords) != 0:
                 anc_params.append(tile_coords)
             else:
@@ -1102,15 +1145,18 @@ def convert_anc_to_box_v2_2d(anc_params, boundingbox):
     boxes = {}
     for h in boundingbox.params['inputs_shapes'].keys():
         boxes[h] = []
-    print('Converting extracted anchors to box parameters.')
+    #print('Converting extracted anchors to box parameters.')
     for i in range(len(anc_params)):
+        print(f'Converting extracted anchors to box parameters: {i + 1} out of {len(anc_params)}', end='      \r',
+              flush=True)
         box = boundingbox.convert_anc_to_box(anc_params[i], np.ones((anc_params[i].shape[0], 1)))
         for j in box.keys():
             boxes[j].append(box[j])
     for k in boxes.keys():
         # this will provide an array with 4 dims for a 2d image, will not work for 3d!
         boxes[k] = np.concatenate(boxes[k], axis=0)
-        print(k, boxes[k].shape)
+        print(k, boxes[k].shape,'                                          ', flush=True)
+        print('Finished!', flush=True)
     return boxes
 
 
@@ -1141,17 +1187,22 @@ def normalized_tiles_and_bbox_params_from_wsi_mosaic_v2(wsi_tiles_filename, mosa
 
 
 def normalized_tiles_and_bbox_params_from_wsi_tiles_v2(wsi_tiles_filename, coords, boundingbox, normalize=False,
-                                                       bbox_size=64, tile_size=1024, per_channel=False):
+                                                       bbox_size=64, tile_size=1024, per_channel=False, nump=False):
     tiles = np.load(wsi_tiles_filename)
     if tiles.shape[3] == 4:
         tiles = tiles[:, :, :, :-1]
-    anc = anc_params_from_tiles(tiles=tiles, coords=coords, wsi_tiles_filename=wsi_tiles_filename, bbox_size=bbox_size,
-                                tile_size=tile_size)
+    if nump:
+        anc = anc_params_from_tiles_v2(tiles=tiles, coords=coords, wsi_tiles_filename=wsi_tiles_filename, bbox_size=bbox_size,
+                                       tile_size=tile_size)
+    else:
+        anc = anc_params_from_tiles(tiles=tiles, coords=coords, wsi_tiles_filename=wsi_tiles_filename, bbox_size=bbox_size,
+                                    tile_size=tile_size)
     sorted_tiles = []
     sorted_anc = []
-    print('Removing tiles without bounding boxes.')
+    # print('Removing tiles without bounding boxes.')
+    print(f'Removing tiles without bounding boxes.', end='                    \r', flush=True)
     for i in range(len(anc)):
-        if anc[i] != 'None':
+        if type(anc[i]) != str:
             sorted_tiles.append(tiles[i])
             sorted_anc.append((anc[i]))
     sorted_tiles = np.array(sorted_tiles)
@@ -1216,6 +1267,7 @@ def get_wsi_coords_of_cells_from_tiles(i, coords, wsi_tiles_filename, tile_size)
         return np.array(wsi_coords)
 
 
+# noinspection PyUnboundLocalVariable
 def extract_cells_using_mask(wsi_tiles_filename, get_wsi_ccords=False, tile_size=1024):
     # function to get wsi coords is providing yx instead xy
     # TODO: make sure this code works once WSI_coords funciton is fixed
@@ -1313,7 +1365,7 @@ def convert_mosaic_coords_to_wsi(coords, metadata, wsi_tiles_filename, tile_size
 
 
 def get_retinanet_training_dictionary_from_mosaic(wsi_tiles_filename, coords, boundingbox, normalize=False,
-                                                  bbox_size=64, tile_size=1024):
+                                                  bbox_size=64, tile_size=1024, nump=False):
     tiles, boxes = normalized_tiles_and_bbox_params_from_wsi_tiles_v2(
         wsi_tiles_filename,
         coords,
@@ -1321,6 +1373,7 @@ def get_retinanet_training_dictionary_from_mosaic(wsi_tiles_filename, coords, bo
         normalize=normalize,
         bbox_size=bbox_size,
         tile_size=tile_size,
+        nump=nump
     )
     boxes['dat'] = tiles
     for key in boxes.keys():
@@ -1405,7 +1458,8 @@ def retinanet_eval_generator(data, batchsize=1, normalize=True, per_channel=Fals
         for key in keys:
             if 'dat' in key:
                 if normalize:
-                    xbatch[key] = per_sample_tile_normalization(data[key][start:stop, ..., c_start_idx:], per_channel=per_channel)
+                    xbatch[key] = per_sample_tile_normalization(data[key][start:stop, ..., c_start_idx:],
+                                                                per_channel=per_channel)
                 else:
                     xbatch[key] = data[key][start:stop, ..., c_start_idx:]
             elif 'msk' in key:
@@ -1572,7 +1626,8 @@ def tile_sample_hdf5_generator_v2(wsi_filename, im_size=1024, sample_size=100, n
     print('Saved as:', full_filename)
 
 
-def tile_sample_hdf5_generator_v3(wsi_filename, im_size=1024, sample_size=100, name=None, half_res=False, save_path=None, sample_num=None):
+def tile_sample_hdf5_generator_v3(wsi_filename, im_size=1024, sample_size=100, name=None, half_res=False,
+                                  save_path=None, sample_num=None):
     if name:
         if name == 'HE':
             wsi_name = re.search('(^.*?) ', os.path.basename(wsi_filename)).group(1) + '_H&E'
@@ -1916,6 +1971,7 @@ def wsi_generator(WSI,
                 counter = 0
                 batch = []
                 if half_res:
+                    # noinspection PyUnboundLocalVariable
                     images = model.predict(images)
                 if normalize:
                     images = per_sample_tile_normalization(np.expand_dims(images, axis=1), per_channel=per_channel)
@@ -1978,7 +2034,7 @@ def retinanet_prediction_output(WSI, model, boundingbox, batch_size=1, im_size=5
         dim = openslide.open_slide(WSI).dimensions
     else:
         dim = WSI.dimensions
-    num_of_images = (dim[0] // im_size)*(dim[1] // im_size)
+    num_of_images = (dim[0] // im_size) * (dim[1] // im_size)
     if num_of_images % batch_size != 0:
         steps = (num_of_images // batch_size) + 1
     else:
@@ -2069,12 +2125,12 @@ def biondi_prevalence_and_coords(WSI,
         biondi.statistics.convert_probabilities_to_predictions(prediction_logits),
         coords,
     )
-    prevalence = (len(affected_coords)/len(coords))*100
+    prevalence = (len(affected_coords) / len(coords)) * 100
     return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence}
 
 
 class PredictionGenerator(keras.utils.Sequence):
-    #TODO: add compatibility with vacuole 40x HE images. such as downscale factor and such
+    # TODO: add compatibility with vacuole 40x HE images. such as downscale factor and such
     def __init__(self,
                  WSI,
                  boundingbox,
@@ -2210,7 +2266,7 @@ def biondi_prevalence_and_coords_v2(WSI,
         predictions,
         coords,
     )
-    prevalence = (len(affected_coords)/len(coords))*100
+    prevalence = (len(affected_coords) / len(coords)) * 100
     if return_predictions:
         return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence, 'predictions': predictions, }
     else:
@@ -2219,7 +2275,7 @@ def biondi_prevalence_and_coords_v2(WSI,
 
 def random_adjust_brightness(x, b_delta, batch_size):
     return np.clip(
-        ((x / 255) + np.random.uniform(-b_delta, b_delta, size=(batch_size, 1, 1, 1, 1)))*255,
+        ((x / 255) + np.random.uniform(-b_delta, b_delta, size=(batch_size, 1, 1, 1, 1))) * 255,
         a_min=0,
         a_max=255
     )
@@ -2253,7 +2309,7 @@ class TrainingGenerator(keras.utils.Sequence):
                  simultaneous_aug=False,
                  b_delta=0.95,
                  c_factor_min=0.1,
-                 c_factor_max=0.9,):
+                 c_factor_max=0.9, ):
         self.retinanet = retinanet
         self.batch_size = batch_size
         self.normalize = normalize
@@ -2330,15 +2386,15 @@ class TrainingGenerator(keras.utils.Sequence):
                             x_batch[key] = self.data[key][batch_idx, ..., self.c_idx_start:].astype('float32')
                             for i, j in enumerate(rand_bools):
                                 if j:
-                                    x_batch[key][i:i+1] = random_adjust_contrast(
-                                        x_batch[key][i:i+1],
+                                    x_batch[key][i:i + 1] = random_adjust_contrast(
+                                        x_batch[key][i:i + 1],
                                         c_factor_min=self.c_factor_min,
                                         c_factor_max=self.c_factor_max,
                                         batch_size=1
                                     )
                                 else:
-                                    x_batch[key][i:i+1] = random_adjust_brightness(
-                                        x_batch[key][i:i+1],
+                                    x_batch[key][i:i + 1] = random_adjust_brightness(
+                                        x_batch[key][i:i + 1],
                                         b_delta=self.b_delta,
                                         batch_size=1
                                     )
@@ -2383,15 +2439,15 @@ class TrainingGenerator(keras.utils.Sequence):
                     x_batch = self.data[batch_idx, ..., self.c_idx_start:].astype('float32')
                     for i, j in enumerate(rand_bools):
                         if j:
-                            x_batch[i:i+1] = random_adjust_contrast(
-                                x_batch[i:i+1],
+                            x_batch[i:i + 1] = random_adjust_contrast(
+                                x_batch[i:i + 1],
                                 c_factor_min=self.c_factor_min,
                                 c_factor_max=self.c_factor_max,
                                 batch_size=1
                             )
                         else:
-                            x_batch[i:i+1] = random_adjust_brightness(
-                                x_batch[i:i+1],
+                            x_batch[i:i + 1] = random_adjust_brightness(
+                                x_batch[i:i + 1],
                                 b_delta=self.b_delta,
                                 batch_size=1
                             )
@@ -2416,7 +2472,7 @@ class TrainingGenerator(keras.utils.Sequence):
             return x_batch, y_batch
 
     def on_epoch_end(self):
-        if self. validation:
+        if self.validation:
             self.indexes = np.arange(self.sample_number)
         else:
             # not necessary since keras shuffles the index it gives __getitem__()
@@ -2441,13 +2497,14 @@ def zstack_to_npy(filepaths, dst=''):
         image[..., 0] = 0
         np.save(dst + os.path.basename(i)[:-4] + '.npy', image[..., ::-1])
 
+
 def anc_params_from_wsi(WSI, coords, bbox_size=128, tile_size=1024, downscale_factor=1, verbose=True):
     anc_params = []
     dim = WSI.dimensions
     grid_height = dim[1] // tile_size
     grid_width = dim[0] // tile_size
     max_tiles = grid_width * grid_height
-    scaled_coords = (coords/downscale_factor).astype(int)
+    scaled_coords = (coords / downscale_factor).astype(int)
     print('Extracting bounding boxes.')
     for i in range(max_tiles):
         tile_bbox_param = []
@@ -2460,7 +2517,7 @@ def anc_params_from_wsi(WSI, coords, bbox_size=128, tile_size=1024, downscale_fa
         r_start = int(tile_size / downscale_factor) * row
         r_stop = r_start + int(tile_size / downscale_factor)
         # TODO: reconsider print output, message rate will likely be too fast
-        print(i + 1, 'out of', max_tiles, '---', c_start, c_stop, r_start, r_stop)
+        print(f'Extracting bounding boxes: {i + 1} out of {max_tiles}',end='      \r', flush=True)
         tile_coords = scaled_coords[((c_start <= scaled_coords[:, 0]) & (scaled_coords[:, 0] < c_stop)) & (
                 (r_start <= scaled_coords[:, 1]) & (scaled_coords[:, 1] < r_stop))]
         x = int((bbox_size / downscale_factor) / 2)
@@ -2481,8 +2538,8 @@ def anc_params_from_wsi(WSI, coords, bbox_size=128, tile_size=1024, downscale_fa
     return anc_params
 
 
-def normalized_tiles_and_bbox_params_from_wsi(WSI, coords, boundingbox, normalize=False,
-                                                       bbox_size=128, tile_size=1024, per_channel=False, downscale_factor=1):
+def normalized_tiles_and_bbox_params_from_wsi(WSI, coords, boundingbox, normalize=False, bbox_size=128, tile_size=1024,
+                                              per_channel=False, downscale_factor=1, nump=False):
     dim = WSI.dimensions
     grid_height = dim[1] // tile_size
     grid_width = dim[0] // tile_size
@@ -2500,8 +2557,9 @@ def normalized_tiles_and_bbox_params_from_wsi(WSI, coords, boundingbox, normaliz
     for i in sorted_tiles:
         r = i // grid_width
         c = i % grid_width
+        # TODO: Double check that level param is correct, consider changing if sampling 10x level
         batch.append(
-            np.array(WSI.read_region((c * tile_size, r * tile_size), 0, (tile_size, tile_size)))[...,:-1])
+            np.array(WSI.read_region((c * tile_size, r * tile_size), 0, (tile_size, tile_size)))[..., :-1])
     batch = np.stack(batch)
     if downscale_factor != 1:
         model = downsample(im_size=tile_size, downsample_factor=downscale_factor)
@@ -2514,7 +2572,7 @@ def normalized_tiles_and_bbox_params_from_wsi(WSI, coords, boundingbox, normaliz
 
 
 def get_retinanet_training_dictionary_from_wsi(wsi_filename, coords, boundingbox, normalize=False,
-                                                  bbox_size=128, tile_size=1024, downscale_factor=1):
+                                               bbox_size=128, tile_size=1024, downscale_factor=1):
     if type(wsi_filename) is str:
         WSI = openslide.OpenSlide(wsi_filename)
     else:
@@ -2543,30 +2601,32 @@ def downsample(im_size, downsample_factor=2, channels=3):
 
 def fibrosis_tiles_and_masks_quarterres(wsi_path, papilla, dense, hyalinized, mineralized):
     tiles = []
-    papilla_pts = pd.read_csv(papilla).to_numpy()[:,1:6]
-    dense_pts = pd.read_csv(dense).to_numpy()[:,1:6]
-    hyalinized_pts = pd.read_csv(hyalinized).to_numpy()[:,1:6]
-    mineralized_pts = pd.read_csv(mineralized).to_numpy()[:,1:6]
-    real_tile_indices = pd.read_csv(papilla).to_numpy()[:,5]
+    papilla_pts = pd.read_csv(papilla).to_numpy()[:, 1:6]
+    dense_pts = pd.read_csv(dense).to_numpy()[:, 1:6]
+    hyalinized_pts = pd.read_csv(hyalinized).to_numpy()[:, 1:6]
+    mineralized_pts = pd.read_csv(mineralized).to_numpy()[:, 1:6]
+    real_tile_indices = pd.read_csv(papilla).to_numpy()[:, 5]
     unique_tile_indices = np.unique(real_tile_indices)
-    WSI=TileLoader(wsi_path)
+    WSI = TileLoader(wsi_path)
     tile_num = len(unique_tile_indices)
-    counter=0
-    #model = biondi.dataset.half_tile_resolution(4096)
+    counter = 0
+    # model = biondi.dataset.half_tile_resolution(4096)
     for i in unique_tile_indices:
         tile_pts = [
-            papilla_pts[papilla_pts[:,-1]==i],
-            dense_pts[dense_pts[:,-1]==i],
-            hyalinized_pts[hyalinized_pts[:,-1]==i],
-            mineralized_pts[mineralized_pts[:,-1]==i],
+            papilla_pts[papilla_pts[:, -1] == i],
+            dense_pts[dense_pts[:, -1] == i],
+            hyalinized_pts[hyalinized_pts[:, -1] == i],
+            mineralized_pts[mineralized_pts[:, -1] == i],
         ]
         papilla_mask = generate_mask_quarterres(tile_pts[0])
         dense_mask = generate_mask_quarterres(tile_pts[1])
         hyalinized_mask = generate_mask_quarterres(tile_pts[2])
         mineralized_mask = generate_mask_quarterres(tile_pts[3])
-        #tile_im = np.array(WSI.load_tile(i))[...,0:4]
-        #combined_mask = np.stack([papilla_mask,dense_mask,hyalinized_mask,mineralized_mask], axis=-1)
-        tiles.append(np.concatenate([np.array(WSI.load_tile_10x(i))[...,0:3], np.stack([papilla_mask,dense_mask,hyalinized_mask,mineralized_mask], axis=-1)], axis=2))
+        # tile_im = np.array(WSI.load_tile(i))[...,0:4]
+        # combined_mask = np.stack([papilla_mask,dense_mask,hyalinized_mask,mineralized_mask], axis=-1)
+        tiles.append(np.concatenate([np.array(WSI.load_tile_10x(i))[..., 0:3],
+                                     np.stack([papilla_mask, dense_mask, hyalinized_mask, mineralized_mask], axis=-1)],
+                                    axis=2))
         counter += 1
         print(counter, 'out of', tile_num)
     return np.stack(tiles)
@@ -2577,38 +2637,40 @@ def generate_mask_quarterres(pts):
         return np.zeros(shape=(1024, 1024), dtype=np.uint8)
     else:
         masks = []
-        unique_tags = np.unique(pts[:,2])
+        unique_tags = np.unique(pts[:, 2])
         for i in unique_tags:
             img = PIL.Image.new('L', (1024, 1024), 0)
-            PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:,2]==i][:,:2]*1-300)], outline=1, fill=1)
+            PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:, 2] == i][:, :2] * 1 - 300)], outline=1,
+                                            fill=1)
             masks.append(np.array(img))
         if len(masks) == 1:
-            #print(masks[0].dtype)
+            # print(masks[0].dtype)
             return masks[0]
         elif len(masks) == 0:
             raise ValueError('Masks list is unexpectedly empty!')
         else:
             masks = np.clip(np.add.reduce(masks, dtype=np.uint8), 0, 1)
-            #print(masks.dtype)
+            # print(masks.dtype)
             return masks
 
 
 class TileLoader:
     def __init__(self, file_path, C):
+        self.C = C
         self.wsi_image = openslide.open_slide(file_path)
         self.width, self.height = self.wsi_image.dimensions
-        self.max_tiles = (self.width // C.tile_size, self.height // C.tile_size)  # (x, y) max tiles
+        self.max_tiles = (self.width // self.C.tile_size, self.height // self.C.tile_size)  # (x, y) max tiles
         self.check_excess()
-        self.C
 
     def check_excess(self):
-        all_tiles = (self.width // (self.C.tile_size // self.C.tile_width), self.height // (self.C.tile_size // self.C.tile_width))
+        all_tiles = (self.width // (self.C.tile_size // self.C.tile_width),
+                     self.height // (self.C.tile_size // self.C.tile_width))
         curr_x = self.max_tiles[0]
         curr_y = self.max_tiles[1]
 
-        if (curr_x * 2 < all_tiles[0]):
+        if curr_x * 2 < all_tiles[0]:
             curr_x += 1
-        if (curr_y * 2 < all_tiles[1]):
+        if curr_y * 2 < all_tiles[1]:
             curr_y += 1
 
         self.max_tiles = (curr_x, curr_y)
@@ -2623,19 +2685,19 @@ class TileLoader:
         size_padding_x = 2 * self.C.padding_size
         size_padding_y = 2 * self.C.padding_size
 
-        size = ((self.C.tile_size), (self.C.tile_size))
+        size = (self.C.tile_size, self.C.tile_size)
         tile = self.wsi_image.read_region(location=coords, level=0, size=size)
         # add white margin if needed
-        for side in (top, left, bot, right):
-            if side != 0:
-                tile = self.add_margin(tile, top, right, bot, left)
-                break
+        # for side in (top, left, bot, right):
+        #     if side != 0:
+        #         tile = self.add_margin(tile, top, right, bot, left)
+        #         break
         return tile
 
     def load_tile_10x(self, tile_num):
         coords = self.calculate_coordinates(tile_num)
         # print(tile_num)
-        top, bot, left, right = 0, 0, 0, 0
+        # top, bot, left, right = 0, 0, 0, 0
         x_tiles = tile_num % self.max_tiles[0]
         y_tiles = self.get_y_coord(tile_num)
 
@@ -2645,10 +2707,10 @@ class TileLoader:
         size = ((self.C.tile_size // 4), (self.C.tile_size // 4))
         tile = self.wsi_image.read_region(location=coords, level=1, size=size)
         # add white margin if needed
-        for side in (top, left, bot, right):
-            if side != 0:
-                tile = self.add_margin(tile, top, right, bot, left)
-                break
+        # for side in (top, left, bot, right):
+        #     if side != 0:
+        #         tile = self.add_margin(tile, top, right, bot, left)
+        #         break
         return tile
 
     def calculate_coordinates(self, tile_number):
@@ -2664,8 +2726,8 @@ class TileLoader:
     def get_y_coord(self, tile_number):
         start = self.max_tiles[0] * self.max_tiles[1]
         y = self.max_tiles[1] - 1
-        while (y >= 0):
-            if (tile_number >= start - self.max_tiles[0]):
+        while y >= 0:
+            if tile_number >= start - self.max_tiles[0]:
                 return y
             start -= self.max_tiles[0]
             y -= 1
@@ -2673,7 +2735,7 @@ class TileLoader:
 
 
 class CConstants:
-    def __init__(self,):
+    def __init__(self, ):
         self.padding_size = 1200
         self.zoom_multiplier = 4
         self.tile_width = 2
