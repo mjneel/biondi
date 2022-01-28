@@ -1,9 +1,11 @@
 import numpy as np
-from tensorflow.keras import Input, Model, layers
+from tensorflow.keras import Input, Model, layers, activations
+from tensorflow import keras, optimizers
 from jarvis.utils.display import imshow
+from jarvis.train import custom
 
 
-def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=False, shared_weights=False):
+def retinanet_resnet50_3d_legacy(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=False, shared_weights=False):
     """Generates retinanet with resnet backbone. Can specify if classification and regression networks share weights"""
     r_model = resnet50_3d(inputs=inputs['dat'],
                           filter_ratio=filter_ratio,
@@ -21,6 +23,34 @@ def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=Fa
                                    filter_ratio=filter_ratio,
                                    shared_weights=shared_weights)
     model = Model(inputs=inputs, outputs=logits)
+    return model
+
+
+def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=False, shared_weights=False, tahn=False,
+                          lr=2e-4):
+    """Generates retinanet with resnet backbone. Can specify if classification and regression networks share weights"""
+    r_model = resnet50_3d(inputs=inputs['dat'],
+                          filter_ratio=filter_ratio,
+                          n=n,
+                          include_fc_layer=include_fc_layer,
+                          kernal1=(1, 1, 1),
+                          kernal3=(1, 3, 3),
+                          kernal7=(1, 7, 7))
+    backbone_output = [r_model.get_layer(layer_name).output for layer_name in ['c3-output', 'c4-output', 'c5-output']]
+    fp_out = feature_pyramid_3d(inputs=backbone_output,
+                                filter_ratio=filter_ratio)
+    logits = class_and_reg_subnets(feature_pyramid=fp_out,
+                                   K=K,
+                                   A=A,
+                                   filter_ratio=filter_ratio,
+                                   shared_weights=shared_weights,
+                                   tahn=tahn)
+    preds = LogisticEndpoint1()(logits, inputs)
+    model = Model(inputs=inputs, outputs=preds)
+    model.compile(
+        optimizer=optimizers.Adam(learning_rate=lr),
+        experimental_run_tf_function=False,
+    )
     return model
 
 
@@ -203,10 +233,10 @@ def feature_pyramid_3d(inputs, filter_ratio):
     return [p3, p4, p5, p6, p7]
 
 
-def class_and_reg_subnets(feature_pyramid, K, A, filter_ratio, shared_weights=False):
+def class_and_reg_subnets(feature_pyramid, K, A, filter_ratio, shared_weights=False, tahn=False):
     if shared_weights:
         class_subnet = classification_head(K, A, filter_ratio)
-        box_subnet = regression_head(A, filter_ratio)
+        box_subnet = regression_head(A, filter_ratio, tahn=tahn)
         class_outputs = [class_subnet(features) for features in feature_pyramid]
         box_outputs = [box_subnet(features) for features in feature_pyramid]
         logits = {'cls-c3': layers.Lambda(lambda x: x, name='cls-c3')(class_outputs[0]),
@@ -221,7 +251,7 @@ def class_and_reg_subnets(feature_pyramid, K, A, filter_ratio, shared_weights=Fa
         reg_models = []
         for _ in feature_pyramid:
             class_models.append(classification_head(K, A, filter_ratio))
-            reg_models.append(regression_head(A, filter_ratio))
+            reg_models.append(regression_head(A, filter_ratio, tahn=tahn))
         logits = {'cls-c3': layers.Lambda(lambda x: x, name='cls-c3')(class_models[0](feature_pyramid[0])),
                   'reg-c3': layers.Lambda(lambda x: x, name='reg-c3')(reg_models[0](feature_pyramid[0])),
                   'cls-c4': layers.Lambda(lambda x: x, name='cls-c4')(class_models[1](feature_pyramid[1])),
@@ -595,7 +625,7 @@ def classification_head(K, A, filter_ratio=1):
     return class_subnet
 
 
-def regression_head(A, filter_ratio=1):
+def regression_head(A, filter_ratio=1, tahn=False):
     kwargs3 = {
         'kernel_size': (1, 3, 3),
         'padding': 'same',
@@ -603,6 +633,11 @@ def regression_head(A, filter_ratio=1):
     conv3 = lambda x, filters, strides: layers.Conv3D(filters=filters,
                                                       strides=strides,
                                                       **kwargs3)(x)
+    # added tahn activation
+    conv3_final = lambda x, filters, strides: layers.Conv3D(filters=filters,
+                                                            strides=strides,
+                                                            activation=activations.tanh,
+                                                            **kwargs3)(x)
     relu = lambda x: layers.LeakyReLU()(x)
     conv_class1 = lambda filters, x: relu(conv3(x,
                                                 filters,
@@ -614,7 +649,11 @@ def regression_head(A, filter_ratio=1):
                                  conv_class1(int(256 * filter_ratio),
                                              conv_class1(int(256 * filter_ratio),
                                                          inputs))))
-    b2 = conv3(b1, 4 * A, strides=1)
+    # changed to use tahn activation
+    if tahn:
+        b2 = conv3_final(b1, 4 * A, strides=1)
+    else:
+        b2 = conv3(b1, 4 * A, strides=1)
 
     box_subnet = Model(inputs=inputs, outputs=b2)
     return box_subnet
@@ -786,3 +825,31 @@ def unet(inputs, num_layers=6, num_classes=2, _3d=False):
     # --- Create model
     model = Model(inputs=inputs, outputs=logits)
     return model
+
+
+class LogisticEndpoint1(keras.layers.Layer):
+    def __init__(self, name=None):
+        super(LogisticEndpoint1, self).__init__(name=name)
+        self.loss1_fn = custom.focal_sigmoid_ce
+        self.loss2_fn = custom.sl1
+        self.ppv_fn = custom.sigmoid_ce_ppv()
+        self.sens_fn = custom.sigmoid_ce_sens()
+    def call(self, logits, targets=None):
+        if targets is not None:
+            # Compute the training-time loss value and add it
+            # to the layer using `self.add_loss()`.
+            loss1 = self.loss1_fn(targets['cls-c3-msk'])(targets['cls-c3'], logits['cls-c3'])
+            loss2 = self.loss2_fn(targets['reg-c3-msk'])(targets['reg-c3'], logits['reg-c3'])
+            self.add_loss(loss1)
+            self.add_loss(loss2)
+
+            # Log the accuracy as a metric (we could log arbitrary metrics,
+            # including different metrics for training and inference.
+            metric1 = custom.sigmoid_ce_ppv()(y_true=targets['cls-c3'], y_pred=logits['cls-c3'])
+            metric2 = custom.sigmoid_ce_sens()(y_true=targets['cls-c3'], y_pred=logits['cls-c3'])
+            #self.add_metric(self.accuracy_fn(targets, logits, sample_weight))
+            self.add_metric(metric1, name='cls-c3_ppv', aggregation='mean')
+            self.add_metric(metric2, name='cls-c3_sens', aggregation='mean')
+
+        # Return the inference-time prediction tensor (for `.predict()`).
+        return logits
