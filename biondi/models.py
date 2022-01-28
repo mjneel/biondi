@@ -27,7 +27,7 @@ def retinanet_resnet50_3d_legacy(inputs, K, A, filter_ratio=1, n=2, include_fc_l
 
 
 def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=False, shared_weights=False, tahn=False,
-                          lr=2e-4):
+                          lr=2e-4, feature_maps=('c3', 'c4', 'c5')):
     """Generates retinanet with resnet backbone. Can specify if classification and regression networks share weights"""
     r_model = resnet50_3d(inputs=inputs['dat'],
                           filter_ratio=filter_ratio,
@@ -44,7 +44,8 @@ def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=Fa
                                    A=A,
                                    filter_ratio=filter_ratio,
                                    shared_weights=shared_weights,
-                                   tahn=tahn)
+                                   tahn=tahn,
+                                   feature_maps=feature_maps)
     preds = LogisticEndpoint1()(logits, inputs)
     model = Model(inputs=inputs, outputs=preds)
     model.compile(
@@ -233,18 +234,22 @@ def feature_pyramid_3d(inputs, filter_ratio):
     return [p3, p4, p5, p6, p7]
 
 
-def class_and_reg_subnets(feature_pyramid, K, A, filter_ratio, shared_weights=False, tahn=False):
+def class_and_reg_subnets(feature_pyramid, K, A, filter_ratio, shared_weights=False, tahn=False, feature_maps=('c3', 'c4', 'c5'),):
     if shared_weights:
         class_subnet = classification_head(K, A, filter_ratio)
         box_subnet = regression_head(A, filter_ratio, tahn=tahn)
         class_outputs = [class_subnet(features) for features in feature_pyramid]
         box_outputs = [box_subnet(features) for features in feature_pyramid]
-        logits = {'cls-c3': layers.Lambda(lambda x: x, name='cls-c3')(class_outputs[0]),
-                  'reg-c3': layers.Lambda(lambda x: x, name='reg-c3')(box_outputs[0]),
-                  'cls-c4': layers.Lambda(lambda x: x, name='cls-c4')(class_outputs[1]),
-                  'reg-c4': layers.Lambda(lambda x: x, name='reg-c4')(box_outputs[1]),
-                  'cls-c5': layers.Lambda(lambda x: x, name='cls-c5')(class_outputs[2]),
-                  'reg-c5': layers.Lambda(lambda x: x, name='reg-c5')(box_outputs[2])}
+        logits = {}
+        if 'c3' in feature_maps:
+            logits['cls-c3'] = layers.Lambda(lambda x: x, name='cls-c3')(class_outputs[0])
+            logits['reg-c3'] = layers.Lambda(lambda x: x, name='reg-c3')(box_outputs[0])
+        if 'c4' in feature_maps:
+            logits['cls-c4'] = layers.Lambda(lambda x: x, name='cls-c4')(class_outputs[1])
+            logits['reg-c4'] = layers.Lambda(lambda x: x, name='reg-c4')(box_outputs[1])
+        if 'c5' in feature_maps:
+            logits['cls-c5'] = layers.Lambda(lambda x: x, name='cls-c5')(class_outputs[2])
+            logits['reg-c5'] = layers.Lambda(lambda x: x, name='reg-c5')(box_outputs[2])
         return logits
     else:
         class_models = []
@@ -252,12 +257,16 @@ def class_and_reg_subnets(feature_pyramid, K, A, filter_ratio, shared_weights=Fa
         for _ in feature_pyramid:
             class_models.append(classification_head(K, A, filter_ratio))
             reg_models.append(regression_head(A, filter_ratio, tahn=tahn))
-        logits = {'cls-c3': layers.Lambda(lambda x: x, name='cls-c3')(class_models[0](feature_pyramid[0])),
-                  'reg-c3': layers.Lambda(lambda x: x, name='reg-c3')(reg_models[0](feature_pyramid[0])),
-                  'cls-c4': layers.Lambda(lambda x: x, name='cls-c4')(class_models[1](feature_pyramid[1])),
-                  'reg-c4': layers.Lambda(lambda x: x, name='reg-c4')(reg_models[1](feature_pyramid[1])),
-                  'cls-c5': layers.Lambda(lambda x: x, name='cls-c5')(class_models[2](feature_pyramid[2])),
-                  'reg-c5': layers.Lambda(lambda x: x, name='reg-c5')(reg_models[2](feature_pyramid[2]))}
+        logits = {}
+        if 'c3' in feature_maps:
+            logits['cls-c3'] = layers.Lambda(lambda x: x, name='cls-c3')(class_models[0](feature_pyramid[0]))
+            logits['reg-c3'] = layers.Lambda(lambda x: x, name='reg-c3')(reg_models[0](feature_pyramid[0]))
+        if 'c4' in feature_maps:
+            logits['cls-c4'] = layers.Lambda(lambda x: x, name='cls-c4')(class_models[1](feature_pyramid[1]))
+            logits['reg-c4'] = layers.Lambda(lambda x: x, name='reg-c4')(reg_models[1](feature_pyramid[1]))
+        if 'c5' in feature_maps:
+            logits['cls-c5'] = layers.Lambda(lambda x: x, name='cls-c5')(class_models[2](feature_pyramid[2]))
+            logits['reg-c5'] = layers.Lambda(lambda x: x, name='reg-c5')(reg_models[2](feature_pyramid[2]))
         return logits
 
 
