@@ -2197,6 +2197,7 @@ class PredictionGenerator(keras.utils.Sequence):
             batch = biondi.dataset.per_sample_tile_normalization(batch, per_channel=self.per_channel)
         if self.retinanet:
             batch_dict = {'dat': np.expand_dims(batch, axis=1)}
+            # TODO: Need to include cls and reg inputs in dictionary
             for key in self.boundingbox.params['inputs_shapes'].keys():
                 if 'msk' in key:
                     batch_dict[key] = np.zeros(
@@ -2344,7 +2345,7 @@ class TrainingGenerator(keras.utils.Sequence):
             self.keys = self.data.keys()
         else:
             self.sample_number = len(self.data)
-            if labels:
+            if labels is not None:
                 if type(labels) is str:
                     self.labels = np.load(labels)
                 else:
