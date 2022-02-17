@@ -55,8 +55,8 @@ def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=Fa
     return model
 
 
-def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False, kernal1=(1, 1, 1), kernal3=(3, 3, 3),
-                kernal7=(7, 7, 7)):
+def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False, logits=True, kernal1=(1, 1, 1), kernal3=(1, 3, 3),
+                kernal7=(1, 7, 7)):
     """
 
     :param inputs: Keras Input object with desire shape
@@ -200,7 +200,10 @@ def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False, kernal1=(1,
     )
     avg_pool = layers.GlobalAveragePooling3D()(res5)
     flatten = layers.Flatten()(avg_pool)
-    logits = layers.Dense(n)(flatten)
+    if logits:
+        logits = layers.Dense(n)(flatten)
+    else:
+        logits = layers.Dense(n, activation='softmax')
     if include_fc_layer:
         model = Model(inputs=inputs, outputs=logits)
     else:
