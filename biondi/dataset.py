@@ -1036,33 +1036,45 @@ def convert_anc_to_box(anc_params, boundingbox, cls_key='cls-c4', cls_mask_key='
     return cls, reg, cls_mask, reg_mask
 
 
-def per_sample_tile_normalization(sorted_tiles, per_channel=False):
+def per_sample_tile_normalization(sorted_tiles, per_channel=False, experimental=True):
     """Per sample tile normalization. Channels are normalized individually."""
     # per_channel option will raise runtime warning if np.std contains zeros, but should be ok to use
     if per_channel:
-        images = []
-        for i in range(len(sorted_tiles)):
-            # print(i + 1, 'out of', len(sorted_tiles))
-            sample = sorted_tiles[i]
-            image = (sample - np.mean(sample, axis=tuple(range(sample.ndim - 1)))) / np.std(sample, axis=tuple(
-                range(sample.ndim - 1)))
-            image[np.isinf(image)] = 0.0
-            images.append(image)
-        images = np.array(images)
-        return images
+        if experimental:
+            x = sorted_tiles.astype('float32')
+            x -= np.nanmean(x, axis=(tuple(range(1, x.ndim - 1))), keepdims=True)
+            x /= (np.nanstd(x, axis=(tuple(range(1, x.ndim - 1))), keepdims=True) + 1e-6)
+            return x
+        else:
+            images = []
+            for i in range(len(sorted_tiles)):
+                # print(i + 1, 'out of', len(sorted_tiles))
+                sample = sorted_tiles[i]
+                image = (sample - np.mean(sample, axis=tuple(range(sample.ndim - 1)))) / np.std(sample, axis=tuple(
+                    range(sample.ndim - 1)))
+                image[np.isinf(image)] = 0.0
+                images.append(image)
+            images = np.array(images)
+            return images
     else:
-        images = []
-        for i in range(len(sorted_tiles)):
-            # print(i + 1, 'out of', len(sorted_tiles))
-            sample = sorted_tiles[i]
-            std = np.std(sample)
-            if std == 0:
-                image = np.zeros(sample.shape, dtype=np.float32)
-            else:
-                image = (sample - np.mean(sample)) / std
-            images.append(image)
-        images = np.array(images)
-        return images
+        if experimental:
+            x = sorted_tiles.astype('float32')
+            x -= np.nanmean(x, axis=(tuple(range(1, x.ndim))), keepdims=True)
+            x /= (np.nanstd(x, axis=(tuple(range(1, x.ndim))), keepdims=True) + 1e-6)
+            return x
+        else:
+            images = []
+            for i in range(len(sorted_tiles)):
+                # print(i + 1, 'out of', len(sorted_tiles))
+                sample = sorted_tiles[i]
+                std = np.std(sample)
+                if std == 0:
+                    image = np.zeros(sample.shape, dtype=np.float32)
+                else:
+                    image = (sample - np.mean(sample)) / std
+                images.append(image)
+            images = np.array(images)
+            return images
 
 
 def normalized_tiles_and_bbox_params_from_wsi_tiles(wsi_tiles_filename, coords, boundingbox, normalize=False,
