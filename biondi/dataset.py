@@ -2342,7 +2342,10 @@ class TrainingGenerator(keras.utils.Sequence):
             if self.retinanet:
                 self.data = data
             else:
-                self.data = np.expand_dims(data, axis=1)
+                if data.ndim == 5:
+                    self.data = data
+                else:
+                    self.data = np.expand_dims(data, axis=1)
         if self.retinanet:
             self.sample_number = len(self.data['dat'])
             self.keys = self.data.keys()
