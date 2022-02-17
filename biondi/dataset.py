@@ -2331,7 +2331,10 @@ class TrainingGenerator(keras.utils.Sequence):
                 with open(data, 'rb') as handle:
                     self.data = pickle.load(handle)
             elif '.npy' in data:
-                self.data = np.expand_dims(np.load(data), axis=1)
+                if data.ndim == 5:
+                    self.data = data
+                else:
+                    self.data = np.expand_dims(np.load(data), axis=1)
             else:
                 print('Warning: Filetype is not recognized. Only ".pickle" and ".npy" filetypes are supported.')
                 return
