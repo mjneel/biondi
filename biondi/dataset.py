@@ -2761,3 +2761,59 @@ class CConstants:
         self.tile_size = 4096
         self.downscale_level = 1
         self.exclusion_line_width = 5
+
+# TODO: Merge Unet specific training generator with main TrainingGenerator.
+class UnetTrainingGenerator(keras.utils.Sequence):
+    def __init__(self,
+                 data,
+                 batch_size,
+                 normalize=True,
+                 validation=False,
+                 flip=False,
+                 rotation=False,
+                 contrast=False,
+                 c_factor=0.9,
+                 r_factor=0.4,):
+        self.batch_size = batch_size
+        self.normalize = normalize
+        self.validation = validation
+        self.flip = flip
+        if self.flip:
+            # will likely need to update this code when moving to a newer version of TF/Keras
+            self.flipper = keras.layers.experimental.preprocessing.RandomFlip()
+        self.rotation = rotation
+        self.r_factor = r_factor
+        if self.rotation:
+            # will likely need to update this code when moving to a newer version of TF/Keras
+            self.rotator = keras.layers.experimental.preprocessing.RandomRotation(self.r_factor)
+        self.contrast = contrast
+        self.c_factor = c_factor
+        if self.contrast:
+            # will likely need to update this code when moving to a newer version of TF/Keras
+            self.contraster = keras.layers.experimental.preprocessing.RandomContrast(self.c_factor)
+        self.data = data
+        self.sample_number = len(self.data)
+
+    def __len__(self):
+        return int(np.ceil(self.sample_number / self.batch_size))
+
+    def __getitem__(self, index):
+        x_batch = self.data[index * self.batch_size:(index + 1) * self.batch_size]
+        if self.flip and not self.validation:
+            x_batch = self.flipper(x_batch).numpy()
+        if self.rotation and not self.validation:
+            x_batch = self.rotator(x_batch).numpy()
+        y_batch = {
+            'zones0': np.expand_dims(x_batch[..., 3:4], axis=1),
+            'zones1': np.expand_dims(x_batch[..., 4:5], axis=1),
+            'zones2': np.expand_dims(x_batch[..., 5:6], axis=1),
+            'zones3': np.expand_dims(x_batch[..., 6:7], axis=1),
+        }
+        if self.contrast and not self.validation:
+            x_batch = self.contraster(x_batch[..., :3]).numpy()
+        else:
+            x_batch = x_batch[..., :3]
+        if self.normalize:
+            x_batch = np.expand_dims(per_sample_tile_normalization(x_batch, per_channel=False, experimental=True),
+                                     axis=1)
+        return x_batch, y_batch
