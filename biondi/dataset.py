@@ -2618,7 +2618,7 @@ def downsample(im_size, downsample_factor=2, channels=3):
     return model
 
 
-def fibrosis_tiles_and_masks_quarterres(wsi_path, papilla, dense, hyalinized, mineralized):
+def fibrosis_tiles_and_masks_quarterres_v1(wsi_path, papilla, dense, hyalinized, mineralized):
     tiles = []
     papilla_pts = pd.read_csv(papilla).to_numpy()[:, 1:6]
     dense_pts = pd.read_csv(dense).to_numpy()[:, 1:6]
@@ -2637,10 +2637,10 @@ def fibrosis_tiles_and_masks_quarterres(wsi_path, papilla, dense, hyalinized, mi
             hyalinized_pts[hyalinized_pts[:, -1] == i],
             mineralized_pts[mineralized_pts[:, -1] == i],
         ]
-        papilla_mask = generate_mask_quarterres(tile_pts[0])
-        dense_mask = generate_mask_quarterres(tile_pts[1])
-        hyalinized_mask = generate_mask_quarterres(tile_pts[2])
-        mineralized_mask = generate_mask_quarterres(tile_pts[3])
+        papilla_mask = generate_mask_quarterres_v1(tile_pts[0])
+        dense_mask = generate_mask_quarterres_v1(tile_pts[1])
+        hyalinized_mask = generate_mask_quarterres_v1(tile_pts[2])
+        mineralized_mask = generate_mask_quarterres_v1(tile_pts[3])
         # tile_im = np.array(WSI.load_tile(i))[...,0:4]
         # combined_mask = np.stack([papilla_mask,dense_mask,hyalinized_mask,mineralized_mask], axis=-1)
         tiles.append(np.concatenate([np.array(WSI.load_tile_10x(i))[..., 0:3],
@@ -2651,7 +2651,40 @@ def fibrosis_tiles_and_masks_quarterres(wsi_path, papilla, dense, hyalinized, mi
     return np.stack(tiles)
 
 
-def generate_mask_quarterres(pts):
+def fibrosis_tiles_and_masks_quarterres_v2(wsi_path, papilla, dense, hyalinized, mineralized):
+    tiles = []
+    papilla_pts = pd.read_csv(papilla).to_numpy()[:, 1:6]
+    dense_pts = pd.read_csv(dense).to_numpy()[:, 1:6]
+    hyalinized_pts = pd.read_csv(hyalinized).to_numpy()[:, 1:6]
+    mineralized_pts = pd.read_csv(mineralized).to_numpy()[:, 1:6]
+    real_tile_indices = pd.read_csv(papilla).to_numpy()[:, 5]
+    unique_tile_indices = np.unique(real_tile_indices)
+    WSI = TileLoaderV2(wsi_path)
+    tile_num = len(unique_tile_indices)
+    counter=0
+    # model = biondi.dataset.half_tile_resolution(4096)
+    for i in unique_tile_indices:
+        tile_pts = [
+            papilla_pts[papilla_pts[:, -1] == i],
+            dense_pts[dense_pts[:, -1] == i],
+            hyalinized_pts[hyalinized_pts[:, -1] == i],
+            mineralized_pts[mineralized_pts[:, -1] == i],
+        ]
+        papilla_mask = generate_mask_quarterres_v2(tile_pts[0])
+        dense_mask = generate_mask_quarterres_v2(tile_pts[1])
+        hyalinized_mask = generate_mask_quarterres_v2(tile_pts[2])
+        mineralized_mask = generate_mask_quarterres_v2(tile_pts[3])
+        # tile_im = np.array(WSI.load_tile(i))[...,0:4]
+        # combined_mask = np.stack([papilla_mask,dense_mask,hyalinized_mask,mineralized_mask], axis=-1)
+        tiles.append(np.concatenate([np.array(WSI.load_tile_10x(i))[..., 0:3],
+                                     np.stack([papilla_mask, dense_mask, hyalinized_mask, mineralized_mask], axis=-1)],
+                                    axis=2))
+        counter += 1
+        print(counter, 'out of', tile_num)
+    return np.stack(tiles)
+
+
+def generate_mask_quarterres_v1(pts):
     if pts.shape[0] == 0:
         return np.zeros(shape=(1024, 1024), dtype=np.uint8)
     else:
@@ -2661,6 +2694,27 @@ def generate_mask_quarterres(pts):
             img = PIL.Image.new('L', (1024, 1024), 0)
             PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:, 2] == i][:, :2] * 1 - 300)], outline=1,
                                             fill=1)
+            masks.append(np.array(img))
+        if len(masks) == 1:
+            # print(masks[0].dtype)
+            return masks[0]
+        elif len(masks) == 0:
+            raise ValueError('Masks list is unexpectedly empty!')
+        else:
+            masks = np.clip(np.add.reduce(masks, dtype=np.uint8), 0, 1)
+            # print(masks.dtype)
+            return masks
+
+
+def generate_mask_quarterres_v2(pts):
+    if pts.shape[0] == 0:
+        return np.zeros(shape=(1024, 1024), dtype=np.uint8)
+    else:
+        masks = []
+        unique_tags = np.unique(pts[:, 2])
+        for i in unique_tags:
+            img = PIL.Image.new('L', (1024, 1024), 0)
+            PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:, 2] == i][:, :2]*1)], outline=1, fill=1)
             masks.append(np.array(img))
         if len(masks) == 1:
             # print(masks[0].dtype)
@@ -2758,6 +2812,93 @@ class TileLoaderV1:
         x = tile_number % self.max_tiles[0]  # zero index
         y = self.get_y_coord(tile_number)  # zero index
         return [x * self.C.tile_size + 1200, y * self.C.tile_size + 1200]
+
+    def get_y_coord(self, tile_number):
+        start = self.max_tiles[0] * self.max_tiles[1]
+        y = self.max_tiles[1] - 1
+        while y >= 0:
+            if tile_number >= start - self.max_tiles[0]:
+                return y
+            start -= self.max_tiles[0]
+            y -= 1
+        return y
+
+
+class TileLoaderV2:
+    """
+    Tileloader to load tiles as implemented in fibrosis client 1.2.0.
+    """
+    def __init__(self, file_path, c=CConstants):
+        self.C = c
+        self.wsi_image = openslide.open_slide(file_path)
+        self.width, self.height = self.wsi_image.dimensions
+        self.max_tiles = (self.width // self.C.tile_size, self.height // self.C.tile_size)  # (x, y) max tiles
+        # self.check_excess()
+
+    def check_excess(self):
+        all_tiles = (self.width // (self.C.tile_size // self.C.tile_width), self.height // (self.C.tile_size // self.C.tile_width))
+        curr_x = self.max_tiles[0]
+        curr_y = self.max_tiles[1]
+
+        if curr_x * 2 < all_tiles[0]:
+            curr_x += 1
+        if curr_y * 2 < all_tiles[1]:
+            curr_y += 1
+
+        self.max_tiles = (curr_x, curr_y)
+
+    def load_tile(self, tile_num):
+        coords = self.calculate_coordinates(tile_num)
+        # print(tile_num)
+        top, bot, left, right = 0, 0, 0, 0
+        x_tiles = tile_num % self.max_tiles[0]
+        y_tiles = self.get_y_coord(tile_num)
+
+        size_padding_x = 2 * self.C.padding_size
+        size_padding_y = 2 * self.C.padding_size
+
+        size = (self.C.tile_size, self.C.tile_size)
+        tile = self.wsi_image.read_region(location=coords, level=0, size=size)
+        # add white margin if needed
+        for side in (top, left, bot, right):
+            if side != 0:
+                tile = self.add_margin(tile, top, right, bot, left)
+                break
+        return tile
+
+    def load_tile_10x(self, tile_num):
+        coords = self.calculate_coordinates(tile_num)
+        # change 12012021
+        if coords[0] == 0:
+            coords[0] = 1200
+        if coords[1] == 0:
+            coords[1] = 1200
+        # print(tile_num)
+        top, bot, left, right = 0, 0, 0, 0
+        x_tiles = tile_num % self.max_tiles[0]
+        y_tiles = self.get_y_coord(tile_num)
+
+        size_padding_x = 2 * self.C.padding_size
+        size_padding_y = 2 * self.C.padding_size
+
+        size = ((self.C.tile_size // 4), (self.C.tile_size // 4))
+        tile = self.wsi_image.read_region(location=coords, level=1, size=size)
+        # add white margin if needed
+        for side in (top, left, bot, right):
+            if side != 0:
+                tile = self.add_margin(tile, top, right, bot, left)
+                break
+        return tile
+
+    def calculate_coordinates(self, tile_number):
+        # zero indexed tile_number
+        if tile_number >= self.max_tiles[0] * self.max_tiles[1]:
+            print("invalid tile_number")
+            # sys.exit()
+
+        x = tile_number % self.max_tiles[0]  # zero index
+        y = self.get_y_coord(tile_number)  # zero index
+        return [x * self.C.tile_size, y * self.C.tile_size]
 
     def get_y_coord(self, tile_number):
         start = self.max_tiles[0] * self.max_tiles[1]
