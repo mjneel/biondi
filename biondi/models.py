@@ -787,7 +787,7 @@ def compare_specific_results(data, i, iou_nms, model, boundingbox):
     return test1_dict
 
 
-def unet(inputs, filter_ratio=1, logits_num=2, num_layers=6, class_num=1, _3d=False):
+def unet(inputs, filter_ratio=1, logits_num=2, num_layers=6, class_num=1, _3d=False, compile=False, lr=2e-4):
     # --- Define kwargs dictionary
     if _3d:
         kwargs = {
@@ -841,6 +841,14 @@ def unet(inputs, filter_ratio=1, logits_num=2, num_layers=6, class_num=1, _3d=Fa
 
     # --- Create model
     model = Model(inputs=inputs, outputs=logits)
+    if compile:
+        model.compile(
+            optimizer=optimizers.Adam(learning_rate=lr),
+            loss_weights={i: keras.losses.SparseCategoricalCrossentropy(from_logits=True) for i in model.output_names},
+            metrics={i: custom.dsc(cls=1) for i in model.output_names},
+            # TODO: Check if leaving this parameter out affects model training.
+            experimental_run_tf_function=False,
+        )
     return model
 
 
