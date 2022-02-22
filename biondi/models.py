@@ -787,7 +787,7 @@ def compare_specific_results(data, i, iou_nms, model, boundingbox):
     return test1_dict
 
 
-def unet(inputs, num_layers=6, num_classes=2, _3d=False):
+def unet(inputs, filter_ratio=1, logits_num=2, num_layers=6, class_num=1, _3d=False):
     # --- Define kwargs dictionary
     if _3d:
         kwargs = {
@@ -820,22 +820,24 @@ def unet(inputs, num_layers=6, num_classes=2, _3d=False):
     contracting_layers = []
     for i in range(num_layers):  # 0,1,2,3,4,5
         if i == 0:
-            contracting_layers.append(conv1(8, inputs['dat']))
+            contracting_layers.append(conv1(int(4*filter_ratio), inputs))
         else:
-            contracting_layers.append(c_layer(16 * i, contracting_layers[i - 1]))
+            contracting_layers.append(c_layer(int(8*filter_ratio)*i, contracting_layers[i-1]))
     expanding_layers = []
     for j in reversed(range(num_layers - 1)):  # 4,3,2,1,0
         if j == num_layers - 2:
-            expanding_layers.append(tran2(16 * j, contracting_layers[j + 1]))
+            expanding_layers.append(tran2(int(8 * filter_ratio) * j, contracting_layers[j + 1]))
         else:
-            expanding_layers.append(e_layer(16 * j if j != 0 else 8,
-                                            16 * (j + 1),
+            expanding_layers.append(e_layer(int(8 * filter_ratio) * j if j != 0 else int(4 * filter_ratio),
+                                            int(8 * filter_ratio) * (j + 1),
                                             expanding_layers[-1] + contracting_layers[j + 1]))
-    last_layer = conv1(8, conv1(8, expanding_layers[-1] + contracting_layers[0]))
+        last_layer = conv1(int(4 * filter_ratio),
+                           conv1(int(4 * filter_ratio), expanding_layers[-1] + contracting_layers[0]))
 
     # --- Create logits
     logits = {}
-    logits['zones'] = layers.Conv3D(filters=num_classes, name='zones', **kwargs)(last_layer)
+    for k in range(class_num):
+        logits[f'zones{k}'] = layers.Conv3D(filters=logits_num, name=f'zones{k}', **kwargs)(last_layer)
 
     # --- Create model
     model = Model(inputs=inputs, outputs=logits)
