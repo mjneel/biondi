@@ -2626,7 +2626,7 @@ def fibrosis_tiles_and_masks_quarterres(wsi_path, papilla, dense, hyalinized, mi
     mineralized_pts = pd.read_csv(mineralized).to_numpy()[:, 1:6]
     real_tile_indices = pd.read_csv(papilla).to_numpy()[:, 5]
     unique_tile_indices = np.unique(real_tile_indices)
-    WSI = TileLoader(wsi_path)
+    WSI = TileLoaderV1(wsi_path)
     tile_num = len(unique_tile_indices)
     counter = 0
     # model = biondi.dataset.half_tile_resolution(4096)
@@ -2673,9 +2673,22 @@ def generate_mask_quarterres(pts):
             return masks
 
 
-class TileLoader:
-    def __init__(self, file_path, C):
-        self.C = C
+class CConstants:
+    def __init__(self, ):
+        self.padding_size = 1200
+        self.zoom_multiplier = 4
+        self.tile_width = 2
+        self.tile_size = 4096
+        self.downscale_level = 1
+        self.exclusion_line_width = 5
+
+
+class TileLoaderV1:
+    """
+    Tileloader to load tiles as implemented in fibrosis client 1.0.0 adn 1.1.0. Do not use on 1.2.0+ or on 0.2.0.
+    """
+    def __init__(self, file_path, c=CConstants):
+        self.C = c
         self.wsi_image = openslide.open_slide(file_path)
         self.width, self.height = self.wsi_image.dimensions
         self.max_tiles = (self.width // self.C.tile_size, self.height // self.C.tile_size)  # (x, y) max tiles
@@ -2715,6 +2728,10 @@ class TileLoader:
 
     def load_tile_10x(self, tile_num):
         coords = self.calculate_coordinates(tile_num)
+        if coords[0] == 0:
+            coords[0] = 1200
+        if coords[1] == 0:
+            coords[1] = 1200
         # print(tile_num)
         # top, bot, left, right = 0, 0, 0, 0
         x_tiles = tile_num % self.max_tiles[0]
@@ -2752,15 +2769,6 @@ class TileLoader:
             y -= 1
         return y
 
-
-class CConstants:
-    def __init__(self, ):
-        self.padding_size = 1200
-        self.zoom_multiplier = 4
-        self.tile_width = 2
-        self.tile_size = 4096
-        self.downscale_level = 1
-        self.exclusion_line_width = 5
 
 # TODO: Merge Unet specific training generator with main TrainingGenerator.
 class UnetTrainingGenerator(keras.utils.Sequence):
