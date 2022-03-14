@@ -2966,3 +2966,98 @@ class UnetTrainingGenerator(keras.utils.Sequence):
             x_batch = np.expand_dims(per_sample_tile_normalization(x_batch, per_channel=False, experimental=True),
                                      axis=1)
         return x_batch, y_batch
+
+
+class UnetPredictionGenerator(keras.utils.Sequence):
+    """
+    Currently only works to produce 10X images from 40x WSIs.
+    """
+    def __init__(self,
+                 WSI,
+                 batch_size=16,
+                 im_size=512,
+                 wsi_level=1,
+                 normalize=True):
+        if type(WSI) is str:
+            self.wsi = openslide.open_slide(WSI)
+            self.filename = WSI
+        else:
+            self.wsi = WSI
+            self.filename = self.wsi._filename
+        self.dim = self.wsi.dimensions
+        self.batch_size = batch_size
+        self.normalize = normalize
+
+        self.im_size = im_size
+        self.wsi_level = wsi_level
+        if self.wsi_level == 0:
+            self.tile_count = (self.dim[0] // self.im_size) * (self.dim[1] // self.im_size)
+            self.column_num = self.dim[0] // self.im_size
+        else:
+            self.tile_count = (self.dim[0] // (self.im_size * 4)) * (self.dim[1] // (self.im_size * 4))
+            self.column_num = self.dim[0] // (self.im_size * 4)
+        self.indexes = np.arange(self.tile_count)
+
+    def __len__(self):
+        return int(np.ceil(self.tile_count / self.batch_size))
+
+    def __getitem__(self, index):
+        batch = []
+        for idx in self.indexes[index * self.batch_size:(index + 1) * self.batch_size]:
+            r = idx // self.column_num
+            c = idx % self.column_num
+            batch.append(
+                np.array(self.wsi.read_region((c * self.im_size*4, r * self.im_size*4), self.wsi_level, (self.im_size, self.im_size))
+                         )[..., :-1])
+        batch = np.stack(batch)
+        if self.normalize:
+            batch = biondi.dataset.per_sample_tile_normalization(batch, per_channel=False).astype('float32')
+        return np.expand_dims(batch, axis=1)
+
+
+def unet_prediction(model, PredictionGenerator, verbose=1):
+    tiles = {
+        'filename': PredictionGenerator.filename,
+        'zones0': [],
+        'zones1': [],
+        'zones2': [],
+        'zones3': [],
+    }
+    progbar = keras.utils.Progbar(PredictionGenerator.__len__(), verbose=verbose)
+    for i in range(PredictionGenerator.__len__()):
+        for key, output in model.predict(PredictionGenerator.__getitem__(i)).items():
+            tiles[key].append(np.argmax(biondi.statistics.softmax(output), axis=-1).astype('uint8'))
+        progbar.add(1)
+    for key, output in tiles.items():
+        if key != 'filename':
+            tiles[key] = np.concatenate(output, axis=0)
+    return tiles
+
+
+def bulk_unet_prediction(filelist, model, dst_dir, verbose=1, batch_size=8):
+    for i in filelist:
+        print(f'Working on {i}:')
+        with open(dst_dir + os.path.basename(i)[:-4] + '_unet_output_dict.pickle', 'wb') as handle:
+            pickle.dump(
+                unet_prediction(model, UnetPredictionGenerator(i, batch_size=batch_size, wsi_level=1),
+                                verbose=verbose), handle)
+
+
+def generate_wsi_mask(data, mask_key, show_image=False):
+    """
+    Only works for 10x images.
+    """
+    dim = openslide.open_slide(data['filename']).dimensions
+    mask = np.zeros(shape=(dim[1]//4, dim[0]//4), dtype=bool)
+    for i in range(len(data[mask_key])):
+        num_c = dim[0]//(4*512)
+        num_r = dim[1]//(4*512)
+        r_start = (i//num_c)*512
+        c_start = (i% num_c)*512
+        mask[r_start:(r_start+512), c_start:(c_start+512)][data[mask_key][i, 0, ...].astype(bool)] = True
+    if show_image:
+        plt.figure(figsize=(30, 30))
+        plt.show(mask)
+        return mask
+    else:
+        return mask
