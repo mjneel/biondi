@@ -973,10 +973,11 @@ def anc_params_from_tiles_v2(tiles, coords, wsi_tiles_filename, bbox_size=64, ti
         c_stop = c_start + tile_size
         r_start = tile_size * row
         r_stop = r_start + tile_size
-        print(f'Extracting bounding boxes: {i + 1} out of {len(tiles)}',end='      \r', flush=True)
+        print(f'Extracting bounding boxes: {i + 1} out of {len(tiles)}', end='      \r', flush=True)
 
         # ((c_start <= coords[:,0]) & (coords[:,0] < c_stop)) & ((r_start <= coords[:,1]) & (coords[:,1] < r_stop))
-        tile_coords = coords[((c_start <= coords[:,0]) & (coords[:,0] < c_stop)) & ((r_start <= coords[:,1]) & (coords[:,1] < r_stop))]
+        tile_coords = coords[((c_start <= coords[:, 0]) & (coords[:, 0] < c_stop)) & (
+                    (r_start <= coords[:, 1]) & (coords[:, 1] < r_stop))]
         x = int(bbox_size / 2)
         y0 = (tile_coords[:, 1] - r_start) - x
         y1 = (tile_coords[:, 1] - r_start) + x
@@ -986,7 +987,7 @@ def anc_params_from_tiles_v2(tiles, coords, wsi_tiles_filename, bbox_size=64, ti
         # (0 <= tile_coords) & (tile_coords < 1024)
         if len(tile_coords) != 0:
             # TODO: need to implement dynamic tile_sizes
-            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < 1024),axis=1)]
+            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < 1024), axis=1)]
             if len(tile_coords) != 0:
                 anc_params.append(tile_coords)
             else:
@@ -1157,7 +1158,7 @@ def convert_anc_to_box_v2_2d(anc_params, boundingbox):
     boxes = {}
     for h in boundingbox.params['inputs_shapes'].keys():
         boxes[h] = []
-    #print('Converting extracted anchors to box parameters.')
+    # print('Converting extracted anchors to box parameters.')
     for i in range(len(anc_params)):
         print(f'Converting extracted anchors to box parameters: {i + 1} out of {len(anc_params)}', end='      \r',
               flush=True)
@@ -1167,7 +1168,7 @@ def convert_anc_to_box_v2_2d(anc_params, boundingbox):
     for k in boxes.keys():
         # this will provide an array with 4 dims for a 2d image, will not work for 3d!
         boxes[k] = np.concatenate(boxes[k], axis=0)
-        print(k, boxes[k].shape,'                                          ', flush=True)
+        print(k, boxes[k].shape, '                                          ', flush=True)
         print('Finished!', flush=True)
     return boxes
 
@@ -1204,10 +1205,12 @@ def normalized_tiles_and_bbox_params_from_wsi_tiles_v2(wsi_tiles_filename, coord
     if tiles.shape[3] == 4:
         tiles = tiles[:, :, :, :-1]
     if nump:
-        anc = anc_params_from_tiles_v2(tiles=tiles, coords=coords, wsi_tiles_filename=wsi_tiles_filename, bbox_size=bbox_size,
+        anc = anc_params_from_tiles_v2(tiles=tiles, coords=coords, wsi_tiles_filename=wsi_tiles_filename,
+                                       bbox_size=bbox_size,
                                        tile_size=tile_size)
     else:
-        anc = anc_params_from_tiles(tiles=tiles, coords=coords, wsi_tiles_filename=wsi_tiles_filename, bbox_size=bbox_size,
+        anc = anc_params_from_tiles(tiles=tiles, coords=coords, wsi_tiles_filename=wsi_tiles_filename,
+                                    bbox_size=bbox_size,
                                     tile_size=tile_size)
     sorted_tiles = []
     sorted_anc = []
@@ -2017,10 +2020,25 @@ def local_to_global_coords_retinanet_v2(local_coords, num_of_columns, tile_size)
         return np.array(global_coords)
 
 
-def cpec_coords_from_anc_v2(anc, num_of_columns, tile_size, half_res=False):
+def cpec_coords_from_anc_v2(anc, num_of_columns, tile_size, downsampled=False, ds_factor=2):
     # anc is a list(2: anchor coords and classes) of a list of arrays (1 array per image tile)
     # anc arrays are local coordinates for the tile
     # convert tile coords to WSI coords
+    """
+    Takes local tile anchor parameters output and converts them to WSI reference frame coordinates.
+    :param anc: list[anchor coords and classes] where anchor coords is list of arrays (1 array per image tile)
+    :type anc: list
+    :param num_of_columns: number of tile sized columns in the WSI. Used to convert local coords to WSI coords
+    :type num_of_columns: int
+    :param tile_size: Size of tile. Should be at the resolution that the AI model uses. Typically 256
+    :type tile_size: int
+    :param downsampled: Whether the coords were obtained from tiles at a downsampled resolution.
+    :type downsampled: bool
+    :param ds_factor: Downsample factor.
+    :type ds_factor: int
+    :return: array of WSI CPEC coords
+    :rtype: ndarray
+    """
     local_coords = []
     for j in range(len(anc[0])):
         if len(anc[0][j]) != 0:
@@ -2030,10 +2048,10 @@ def cpec_coords_from_anc_v2(anc, num_of_columns, tile_size, half_res=False):
         else:
             local_coords.append(anc[0][j])
     wsi_coords = local_to_global_coords_retinanet_v2(local_coords, num_of_columns, tile_size)
-    if not half_res:
+    if not downsampled:
         return wsi_coords
-    elif half_res:
-        return (wsi_coords * 2).astype(int)
+    elif downsampled:
+        return (wsi_coords * ds_factor).astype(int)
     else:
         print('half_res parameter must be a boolean!')
         return
@@ -2130,7 +2148,7 @@ def biondi_prevalence_and_coords(WSI,
             apply_deltas=True),
         dim[0] // im_size,
         tile_size=tile_size,
-        half_res=half_res
+        downsampled=half_res
     )
     prediction_logits = classifier.predict(wsi_cpec_generator(wsi, coords))
     affected_coords = biondi.statistics.sort_affected_coords_from_aipredictions(
@@ -2142,19 +2160,22 @@ def biondi_prevalence_and_coords(WSI,
 
 
 class PredictionGenerator(keras.utils.Sequence):
-    # TODO: add compatibility with vacuole 40x HE images. such as downscale factor and such
+    # TODO: consider add code to allow use of 40x WSI level for vesicles if the 10x level cannot be read by openslide.
+    # TODO: consider removing old parameter
     def __init__(self,
                  WSI,
                  boundingbox,
                  batch_size=1,
                  im_size=512,
-                 half_res=True,
+                 downsample=True,
                  normalize=True,
                  per_channel=False,
-                 two_channel=True,
+                 two_channel=False,
                  prediction=False,
                  retinanet=False,
-                 coords=None):
+                 coords=None,
+                 vesicles=False,
+                 old=False,):
         if type(WSI) is str:
             self.wsi = openslide.open_slide(WSI)
         else:
@@ -2167,13 +2188,20 @@ class PredictionGenerator(keras.utils.Sequence):
         self.column_num = self.dim[0] // self.im_size
         self.boundingbox = boundingbox
         self.batch_size = batch_size
-        self.half_res = half_res
+        self.downsample = downsample
         self.two_channel = two_channel
-        if self.half_res:
+        self.vesicles = vesicles
+        if self.vesicles:
+            self.dsf = 4
+            self.cpec_im_size = 128
+        else:
+            self.dsf = 2
+            self.cpec_im_size = 64
+        if self.downsample and not self.vesicles:
             if self.two_channel:
-                self.downscale_model = biondi.dataset.half_tile_resolution(self.im_size, channels=2)
+                self.downscale_model = downsampling_model(self.im_size, downsample_factor=self.dsf, channels=2)
             else:
-                self.downscale_model = biondi.dataset.half_tile_resolution(self.im_size)
+                self.downscale_model = downsampling_model(self.im_size, downsample_factor=self.dsf)
         self.normalize = normalize
         self.per_channel = per_channel
         if self.two_channel:
@@ -2182,6 +2210,7 @@ class PredictionGenerator(keras.utils.Sequence):
             self.c_idx_start = 0
         self.prediction = prediction
         self.coords = coords
+        self.old = old
         self.on_epoch_end()
 
     def __len__(self):
@@ -2196,24 +2225,28 @@ class PredictionGenerator(keras.utils.Sequence):
             for idx in self.indexes[index * self.batch_size:(index + 1) * self.batch_size]:
                 r = idx // self.column_num
                 c = idx % self.column_num
-                batch.append(
-                    np.array(self.wsi.read_region((c * self.im_size, r * self.im_size), 0, (self.im_size, self.im_size))
-                             )[..., self.c_idx_start:-1])
+                if self.vesicles:
+                    batch.append(
+                        np.array(self.wsi.read_region((c * self.im_size, r * self.im_size), 1,
+                                                      (int(self.im_size / self.dsf), int(self.im_size / self.dsf)))
+                                 )[..., self.c_idx_start:-1])
+                else:
+                    batch.append(
+                        np.array(self.wsi.read_region((c * self.im_size, r * self.im_size), 0, (self.im_size, self.im_size))
+                                 )[..., self.c_idx_start:-1])
             batch = np.stack(batch)
         else:
             batch_idx = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
-            batch = wsi_cell_extraction_from_coords_v3(self.wsi, im_size=64, coords=self.coords[batch_idx], verbose=0)
-        if self.half_res:
-            batch = self.downscale_model(batch.astype('float32'))
+            batch = wsi_cell_extraction_from_coords_v3(self.wsi, im_size=self.cpec_im_size, coords=self.coords[batch_idx], verbose=0)
+        if self.downsample and not self.vesicles:
+            batch = self.downscale_model(batch.astype('float32')).numpy()
         if self.normalize:
             batch = biondi.dataset.per_sample_tile_normalization(batch, per_channel=self.per_channel)
         if self.retinanet:
             batch_dict = {'dat': np.expand_dims(batch, axis=1)}
-            # TODO: Need to include cls and reg inputs in dictionary
             for key in self.boundingbox.params['inputs_shapes'].keys():
-                if 'msk' in key:
-                    batch_dict[key] = np.zeros(
-                        shape=(self.batch_size,) + tuple(self.boundingbox.params['inputs_shapes'][key]))
+                batch_dict[key] = np.zeros(
+                    shape=(len(batch_dict['dat']),) + tuple(self.boundingbox.params['inputs_shapes'][key]))
             return batch_dict
         else:
             return np.expand_dims(batch, axis=1)
@@ -2225,17 +2258,16 @@ class PredictionGenerator(keras.utils.Sequence):
             self.indexes = np.arange(len(self.coords))
 
 
-def retinanet_prediction_output_v2(WSI, model, boundingbox):
+def retinanet_prediction_output_v2(WSI, model, boundingbox, downsample, im_size, two_channel, old=False, vesicle=False):
     # want to add path boolean and code load model if model is a filepath
     output = model.predict(
-        PredictionGenerator(WSI, boundingbox, batch_size=8, retinanet=True),
+        PredictionGenerator(WSI, boundingbox, batch_size=32, retinanet=True, downsample=downsample, im_size=im_size,
+                            two_channel=two_channel, old=old, vesicles=vesicle),
         verbose=1,
-        workers=8,
-        max_queue_size=64
+        workers=12,
+        max_queue_size=128
     )
-    # TODO: TF 2.5 seems to output a dictionary and the blow  line of code now just produces a dictionary without any actually data, only string names.
-    output_dic = {name: pred for name, pred in zip(model.output_names, output)}
-    return output_dic
+    return output
 
 
 def biondi_prevalence_and_coords_v2(WSI,
@@ -2245,7 +2277,43 @@ def biondi_prevalence_and_coords_v2(WSI,
                                     im_size=512,
                                     half_res=True,
                                     iou_nms=0.3,
-                                    return_predictions=False):
+                                    return_predictions=False,
+                                    two_channel=False,
+                                    filter_coords=True,
+                                    filter_threshold=110,
+                                    old=False):
+    """
+    Returns Biondi body prevalence and coords.
+
+    :param WSI: WSI filepath or Openslide object
+    :type WSI: str or openslide object
+    :param retinanet: retinanet CPEC detection model
+    :type retinanet: Keras model
+    :param classifier: resnet CPEC classifier model
+    :type classifier: Keras model
+    :param boundingbox: bounding box from Jarvis package
+    :type boundingbox: boundingbox object
+    :param im_size: Size of image tiles fed into the retinanet model before downsampling. Should be 512 for Biondi bodies.
+    :type im_size: int
+    :param half_res:
+    :type half_res: bool
+    :param iou_nms: non-max suppression threshold
+    :type iou_nms: float
+    :param return_predictions: Whether to return predictions
+    :type return_predictions: bool
+    :param two_channel:
+    :type two_channel: bool
+    :param filter_coords: Whether to filter predicted CPEC coords to remove coords unlike to be CPECs based on proximity
+    of neighboring cells.
+    :type filter_coords: bool
+    :param filter_threshold: Threshold to check for neighboring CPECs for filtering coords. Typically 110 which
+    corresponds roughly to 35.4 microns.
+    :type filter_threshold: int
+    :param old:
+    :type old: bool
+    :return: total coords, affected coords, Biondi body prevalence, and predictions (optional)
+    :rtype: dict
+    """
     if type(WSI) is str:
         wsi = openslide.open_slide(WSI)
     else:
@@ -2260,30 +2328,158 @@ def biondi_prevalence_and_coords_v2(WSI,
             retinanet_prediction_output_v2(
                 WSI=wsi,
                 model=retinanet,
-                boundingbox=boundingbox
+                boundingbox=boundingbox,
+                downsample=half_res,
+                im_size=im_size,
+                two_channel=two_channel,
+                old=old,
             ),
             iou_nms=iou_nms,
             apply_deltas=True),
         dim[0] // im_size,
         tile_size=tile_size,
-        half_res=half_res,
+        downsampled=half_res,
+        ds_factor=2,
     )
+    if filter_coords:
+        coords = binary_stats(coords, f_threshold=filter_threshold)
     prediction_logits = classifier.predict(
-        PredictionGenerator(wsi, boundingbox, batch_size=32, half_res=False, retinanet=False, coords=coords),
+        PredictionGenerator(wsi, boundingbox, batch_size=32, downsample=False, retinanet=False, coords=coords),
         verbose=1,
-        workers=8,
-        max_queue_size=64
+        workers=12,
+        max_queue_size=128,
     )
-    predictions = biondi.statistics.convert_probabilities_to_predictions(prediction_logits)
-    affected_coords = biondi.statistics.sort_affected_coords_from_aipredictions(
-        predictions,
-        coords,
-    )
+    predictions = np.argmax(prediction_logits, axis=-1)
+    affected_coords = coords[predictions == 1]
     prevalence = (len(affected_coords) / len(coords)) * 100
     if return_predictions:
-        return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence, 'predictions': predictions, }
+        return {'coords': coords,
+                'af_coords': affected_coords,
+                'prevalence': prevalence,
+                'predictions': predictions, }
     else:
-        return {'coords': coords, 'af_coords': affected_coords, 'prevalence': prevalence}
+        return {'coords': coords,
+                'af_coords': affected_coords,
+                'prevalence': prevalence}
+
+
+def vesicle_prevalence_and_coords(WSI,
+                                     retinanet,
+                                     classifier,
+                                     boundingbox,
+                                     im_size=1024,
+                                     downsample=True,
+                                     iou_nms=0.3,
+                                     return_predictions=False,
+                                     filter_coords=True,
+                                     filter_threshold=258,
+                                     old=False,
+                                     binary_predictions=True,
+                                     secondary_classifier=None):
+    if type(WSI) is str:
+        wsi = openslide.open_slide(WSI)
+    else:
+        wsi = WSI
+    dim = wsi.dimensions
+    tile_size = im_size // 4
+    coords = cpec_coords_from_anc_v2(
+        boundingbox.convert_box_to_anc(
+            retinanet_prediction_output_v2(
+                WSI=wsi,
+                model=retinanet,
+                boundingbox=boundingbox,
+                downsample=downsample,
+                im_size=im_size,
+                two_channel=False,
+                old=old,
+                vesicle=True
+            ),
+            iou_nms=iou_nms,
+            apply_deltas=True),
+        dim[0] // im_size,
+        tile_size=tile_size,
+        downsampled=downsample,
+        ds_factor=4,
+    )
+    if filter_coords:
+        # f_threshold value may need checking/optimization. Number is based off value used for biondi bodies
+        # (35.4 microns) but is adjusted based on the resolution of 40x brightfield images, which is 258.
+        coords = binary_stats(coords, f_threshold=filter_threshold)
+    binary_prediction_logits = classifier.predict(
+        PredictionGenerator(wsi, boundingbox, batch_size=32, downsample=False,
+                            retinanet=False, coords=coords, vesicles=True),
+        verbose=1,
+        workers=12,
+        max_queue_size=128,
+    )
+    # predictions are currently binary
+    binary_prediction = np.argmax(binary_prediction_logits, axis=-1)
+    if not binary_predictions:
+        full_prediction_logits = secondary_classifier.predict(
+            PredictionGenerator(wsi, boundingbox, batch_size=32, downsample=False,
+                                retinanet=False, coords=coords[binary_prediction==1], vesicles=True),
+            verbose=1,
+            workers=12,
+            max_queue_size=128,
+        )
+        full_prediction = np.argmax(full_prediction_logits, axis=-1) + 1
+        coords = np.concatenate([coords[binary_prediction==0],coords[binary_prediction==1]], axis=0)
+        full_predictions = np.concatenate([binary_prediction[binary_predictions==0], full_prediction], axis=0)
+    else:
+        coords = coords
+        full_predictions = binary_prediction
+    # affected_coords = coords[predictions == 1]
+    prevalence = (len(coords[full_predictions>0]) / len(coords)) * 100
+    if return_predictions:
+        return {'coords': coords,
+                'binary prevalence': prevalence,
+                'predictions': full_predictions, }
+    else:
+        return {'coords': coords,
+                'binary prevalence': prevalence}
+
+
+def binary_stats(pred, true=None, threshold=30, f_threshold=110):
+    """
+    Filters predicted CPEC coords to filter out cells unlikely to be CPECs by checking if any other cells are nearby.
+    Will provide some binary statistics if true CPEC coords are given.
+    :param pred: predicted CPEC coords
+    :type pred: ndarray
+    :param true: True CPEC coords (optional)
+    :type true: ndarray
+    :param threshold: Distance threshold to determine if two coordinates are the same cell.
+    :type threshold: int
+    :param f_threshold:Threshold to check for neighboring CPECs for filtering coords. Typically 110 which corresponds
+    roughly to 35.4 microns.
+    :type f_threshold: int
+    :return: returns filtered coords and prints some binary statistics if True coords are also provided
+    :rtype: ndarray
+    """
+    PT = KDTree(pred)
+    if not true:
+        distance = PT.query(pred, k=2, return_distance=True)[0][:, 1]
+        return pred[distance < f_threshold]
+    TT = KDTree(true)
+    TP = np.sum(TT.query(pred)[0] < threshold)
+    FP = np.sum(TT.query(pred)[0] > threshold)
+    P = len(true)
+    FN = np.sum(PT.query(true)[0] > threshold)
+    TPR1 = TP / (TP + FN)
+    TPR2 = TP / P
+    PPV = TP / (TP + FP)
+    FNR1 = FN / (FN + TP)
+    FNR2 = FN / P
+    FDR = FP / (FP + TP)
+    print(f'TP = {TP}')
+    print(f'FP = {FP}')
+    print(f'P = {P}')
+    print(f'FN(may be inappropriate) = {FN}')
+    print(f'TPR = {TPR1} (TP/(TP+FN)) or {TPR2} (TP/P)')
+    print(f'PPV = {PPV}')
+    print(f'FNR(may be inappropriate) = {FNR1} (FN/(FN+TP)) or {FNR2} (FN/P)')
+    print(f'FDR = {FDR}')
+    distance = TT.query(pred, k=2, return_distance=True)[0][:, 1]
+    return pred[distance < f_threshold]
 
 
 def random_adjust_brightness(x, b_delta, batch_size):
@@ -2304,6 +2500,7 @@ def random_adjust_contrast(x, c_factor_min, c_factor_max, batch_size):
     )
 
 
+# TODO: update code to use keras augmentation functions
 class TrainingGenerator(keras.utils.Sequence):
     def __init__(self,
                  data,
@@ -2349,7 +2546,8 @@ class TrainingGenerator(keras.utils.Sequence):
                     if self.data.ndim != 5:
                         raise ValueError(f"Data ndim is {self.data.ndim}. Data needs to have either 4 or 5 dimensions.")
             else:
-                raise ValueError('Warning: Filetype is not recognized. Only ".pickle" and ".npy" filetypes are supported.')
+                raise ValueError(
+                    'Warning: Filetype is not recognized. Only ".pickle" and ".npy" filetypes are supported.')
         else:
             if self.retinanet:
                 self.data = data
@@ -2536,7 +2734,7 @@ def anc_params_from_wsi(WSI, coords, bbox_size=128, tile_size=1024, downscale_fa
         r_start = int(tile_size / downscale_factor) * row
         r_stop = r_start + int(tile_size / downscale_factor)
         # TODO: reconsider print output, message rate will likely be too fast
-        print(f'Extracting bounding boxes: {i + 1} out of {max_tiles}',end='      \r', flush=True)
+        print(f'Extracting bounding boxes: {i + 1} out of {max_tiles}', end='      \r', flush=True)
         tile_coords = scaled_coords[((c_start <= scaled_coords[:, 0]) & (scaled_coords[:, 0] < c_stop)) & (
                 (r_start <= scaled_coords[:, 1]) & (scaled_coords[:, 1] < r_stop))]
         x = int((bbox_size / downscale_factor) / 2)
@@ -2546,8 +2744,7 @@ def anc_params_from_wsi(WSI, coords, bbox_size=128, tile_size=1024, downscale_fa
         x1 = (tile_coords[:, 0] - c_start) + x
         tile_coords = np.stack([y0, x0, y1, x1], axis=1)
         if len(tile_coords) != 0:
-            # TODO: Implement dynamic tilesizes for param comparisons
-            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < 1024), axis=1)]
+            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < tile_size), axis=1)]
             if len(tile_coords) != 0:
                 anc_params.append(tile_coords)
             else:
@@ -2581,7 +2778,7 @@ def normalized_tiles_and_bbox_params_from_wsi(WSI, coords, boundingbox, normaliz
             np.array(WSI.read_region((c * tile_size, r * tile_size), 0, (tile_size, tile_size)))[..., :-1])
     batch = np.stack(batch)
     if downscale_factor != 1:
-        model = downsample(im_size=tile_size, downsample_factor=downscale_factor)
+        model = downsampling_model(im_size=tile_size, downsample_factor=downscale_factor)
         batch = model.predict(batch)
     if normalize:
         images = per_sample_tile_normalization(batch, per_channel=per_channel)
@@ -2611,7 +2808,18 @@ def get_retinanet_training_dictionary_from_wsi(wsi_filename, coords, boundingbox
     return boxes
 
 
-def downsample(im_size, downsample_factor=2, channels=3):
+def downsampling_model(im_size, downsample_factor=2, channels=3):
+    """
+    Creates a model to utilizing average pooling to downsample an image
+    :param im_size: Size of the original image
+    :type im_size: int
+    :param downsample_factor: Factor by which to downsample image
+    :type downsample_factor: int
+    :param channels: Number of channels in the image. Usually 3, but can vary for fluorescent images.
+    :type channels: int
+    :return: A downsampling model
+    :rtype: Keras model
+    """
     inputs = keras.Input(shape=(im_size, im_size, channels))
     out = keras.layers.AveragePooling2D(pool_size=downsample_factor)(inputs)
     model = keras.Model(inputs=inputs, outputs=out)
@@ -2661,7 +2869,7 @@ def fibrosis_tiles_and_masks_quarterres_v2(wsi_path, papilla, dense, hyalinized,
     unique_tile_indices = np.unique(real_tile_indices)
     WSI = TileLoaderV2(wsi_path)
     tile_num = len(unique_tile_indices)
-    counter=0
+    counter = 0
     # model = biondi.dataset.half_tile_resolution(4096)
     for i in unique_tile_indices:
         tile_pts = [
@@ -2714,7 +2922,7 @@ def generate_mask_quarterres_v2(pts):
         unique_tags = np.unique(pts[:, 2])
         for i in unique_tags:
             img = PIL.Image.new('L', (1024, 1024), 0)
-            PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:, 2] == i][:, :2]*1)], outline=1, fill=1)
+            PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:, 2] == i][:, :2] * 1)], outline=1, fill=1)
             masks.append(np.array(img))
         if len(masks) == 1:
             # print(masks[0].dtype)
@@ -2741,6 +2949,7 @@ class TileLoaderV1:
     """
     Tileloader to load tiles as implemented in fibrosis client 1.0.0 adn 1.1.0. Do not use on 1.2.0+ or on 0.2.0.
     """
+
     def __init__(self, file_path, c=CConstants):
         self.C = c
         self.wsi_image = openslide.open_slide(file_path)
@@ -2828,6 +3037,7 @@ class TileLoaderV2:
     """
     Tileloader to load tiles as implemented in fibrosis client 1.2.0.
     """
+
     def __init__(self, file_path, c=CConstants):
         self.C = c
         self.wsi_image = openslide.open_slide(file_path)
@@ -2836,7 +3046,8 @@ class TileLoaderV2:
         # self.check_excess()
 
     def check_excess(self):
-        all_tiles = (self.width // (self.C.tile_size // self.C.tile_width), self.height // (self.C.tile_size // self.C.tile_width))
+        all_tiles = (
+        self.width // (self.C.tile_size // self.C.tile_width), self.height // (self.C.tile_size // self.C.tile_width))
         curr_x = self.max_tiles[0]
         curr_y = self.max_tiles[1]
 
@@ -2922,7 +3133,7 @@ class UnetTrainingGenerator(keras.utils.Sequence):
                  rotation=False,
                  contrast=False,
                  c_factor=0.9,
-                 r_factor=0.4,):
+                 r_factor=0.4, ):
         self.batch_size = batch_size
         self.normalize = normalize
         self.validation = validation
@@ -2972,6 +3183,7 @@ class UnetPredictionGenerator(keras.utils.Sequence):
     """
     Currently only works to produce 10X images from 40x WSIs.
     """
+
     def __init__(self,
                  WSI,
                  batch_size=16,
@@ -3007,7 +3219,8 @@ class UnetPredictionGenerator(keras.utils.Sequence):
             r = idx // self.column_num
             c = idx % self.column_num
             batch.append(
-                np.array(self.wsi.read_region((c * self.im_size*4, r * self.im_size*4), self.wsi_level, (self.im_size, self.im_size))
+                np.array(self.wsi.read_region((c * self.im_size * 4, r * self.im_size * 4), self.wsi_level,
+                                              (self.im_size, self.im_size))
                          )[..., :-1])
         batch = np.stack(batch)
         if self.normalize:
@@ -3048,13 +3261,13 @@ def generate_wsi_mask(data, mask_key, show_image=False):
     Only works for 10x images.
     """
     dim = openslide.open_slide(data['filename']).dimensions
-    mask = np.zeros(shape=(dim[1]//4, dim[0]//4), dtype=bool)
+    mask = np.zeros(shape=(dim[1] // 4, dim[0] // 4), dtype=bool)
     for i in range(len(data[mask_key])):
-        num_c = dim[0]//(4*512)
-        num_r = dim[1]//(4*512)
-        r_start = (i//num_c)*512
-        c_start = (i% num_c)*512
-        mask[r_start:(r_start+512), c_start:(c_start+512)][data[mask_key][i, 0, ...].astype(bool)] = True
+        num_c = dim[0] // (4 * 512)
+        num_r = dim[1] // (4 * 512)
+        r_start = (i // num_c) * 512
+        c_start = (i % num_c) * 512
+        mask[r_start:(r_start + 512), c_start:(c_start + 512)][data[mask_key][i, 0, ...].astype(bool)] = True
     if show_image:
         plt.figure(figsize=(30, 30))
         plt.show(mask)
