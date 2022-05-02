@@ -2424,7 +2424,7 @@ def vesicle_prevalence_and_coords(WSI,
         )
         full_prediction = np.argmax(full_prediction_logits, axis=-1) + 1
         coords = np.concatenate([coords[binary_prediction==0],coords[binary_prediction==1]], axis=0)
-        full_predictions = np.concatenate([binary_prediction[binary_predictions==0], full_prediction], axis=0)
+        full_predictions = np.concatenate([binary_prediction[binary_prediction==0], full_prediction], axis=0)
     else:
         coords = coords
         full_predictions = binary_prediction
