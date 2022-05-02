@@ -23,7 +23,7 @@ import biondi.statistics
 import pickle
 import PIL
 import math
-
+import seaborn as sns
 
 def load_tif(tif_file):
     # TODO: adjust code to load channels last regardles of skimage or imageio version
@@ -3228,7 +3228,25 @@ class UnetPredictionGenerator(keras.utils.Sequence):
         return np.expand_dims(batch, axis=1)
 
 
-def unet_prediction(model, PredictionGenerator, verbose=1):
+def downsampling3D_model(im_size, downsample_factor=2, channels=3):
+    """
+    Creates a model to utilizing average pooling to downsample 2D images represented as 5D tensors/arrays.
+    :param im_size: Size of the original image
+    :type im_size: int
+    :param downsample_factor: Factor by which to downsample image
+    :type downsample_factor: int
+    :param channels: Number of channels in the image. Usually 3, but can vary for fluorescent images.
+    :type channels: int
+    :return: A downsampling model
+    :rtype: Keras model
+    """
+    inputs = keras.Input(shape=(1, im_size, im_size, channels))
+    out = keras.layers.AveragePooling3D(pool_size=(1, downsample_factor, downsample_factor))(inputs)
+    model = keras.Model(inputs=inputs, outputs=out)
+    return model
+
+
+def unet_prediction(model, PredictionGenerator, verbose=1, workers=8, max_queue_size=64):
     tiles = {
         'filename': PredictionGenerator.filename,
         'zones0': [],
@@ -3236,11 +3254,16 @@ def unet_prediction(model, PredictionGenerator, verbose=1):
         'zones2': [],
         'zones3': [],
     }
+    ds_model = downsampling3D_model(512, channels=2)
+    enqueuer = keras.utils.OrderedEnqueuer(PredictionGenerator)
+    enqueuer.start(workers=workers, max_queue_size=max_queue_size)
+    datas = enqueuer.get()
     progbar = keras.utils.Progbar(PredictionGenerator.__len__(), verbose=verbose)
     for i in range(PredictionGenerator.__len__()):
-        for key, output in model.predict(PredictionGenerator.__getitem__(i)).items():
-            tiles[key].append(np.argmax(biondi.statistics.softmax(output), axis=-1).astype('uint8'))
+        for key, output in model.predict_on_batch(next(datas)).items():
+            tiles[key].append(np.argmax(ds_model.predict(output), axis=-1).astype('uint8'))
         progbar.add(1)
+    enqueuer.stop()
     for key, output in tiles.items():
         if key != 'filename':
             tiles[key] = np.concatenate(output, axis=0)
@@ -3261,16 +3284,113 @@ def generate_wsi_mask(data, mask_key, show_image=False):
     Only works for 10x images.
     """
     dim = openslide.open_slide(data['filename']).dimensions
-    mask = np.zeros(shape=(dim[1] // 4, dim[0] // 4), dtype=bool)
+    mask = np.zeros(shape=(dim[1] // 8, dim[0] // 8), dtype=bool)
     for i in range(len(data[mask_key])):
-        num_c = dim[0] // (4 * 512)
-        num_r = dim[1] // (4 * 512)
-        r_start = (i // num_c) * 512
-        c_start = (i % num_c) * 512
-        mask[r_start:(r_start + 512), c_start:(c_start + 512)][data[mask_key][i, 0, ...].astype(bool)] = True
+        num_c = dim[0] // (8 * 256)
+        num_r = dim[1] // (8 * 256)
+        r_start = (i // num_c) * 256
+        c_start = (i % num_c) * 256
+        mask[r_start:(r_start + 256), c_start:(c_start + 256)][data[mask_key][i, 0, ...].astype(bool)] = True
     if show_image:
         plt.figure(figsize=(30, 30))
         plt.show(mask)
         return mask
     else:
         return mask
+
+
+def get_labeled_papilla(data):
+    """
+
+    :return:
+    :rtype:
+    """
+    wsi_data = generate_wsi_mask(data, 'zones0')
+    refined_mask = ndimage.binary_closing(
+        ndimage.binary_opening(
+            ndimage.binary_fill_holes(
+                wsi_data
+            ),
+            iterations=3,
+        ),
+        iterations=3,
+    )
+    refined_mask = skimage.morphology.remove_small_objects(refined_mask, min_size=100, out=refined_mask)
+    distance = ndimage.distance_transform_edt(refined_mask).astype('float32')
+    local_max = skimage.feature.peak_local_max(distance, indices=False, min_distance=20, labels=refined_mask)
+    local_max, num_labels = ndimage.label(local_max)
+    labeled_papilla = skimage.segmentation.watershed(-distance, local_max, mask=refined_mask)
+    return labeled_papilla, num_labels
+
+
+def get_pap_data(pap_mask, feature_mask):
+    coords = np.array(ndimage.center_of_mass(pap_mask, labels=pap_mask, index=np.arange(1, pap_mask.max()+1)))[...,::-1]
+    slices = ndimage.find_objects(pap_mask)
+    pap_labels = []
+    pap_areas = []
+    for i in range(len(slices)):
+        if np.any(feature_mask[slices[i]][pap_mask[slices[i]] == (i + 1)] == True):
+            pap_labels.append(True)
+            pap_areas.append(np.sum(feature_mask[slices[i]][pap_mask[slices[i]] == (i + 1)] == True))
+        else:
+            pap_labels.append(False)
+            pap_areas.append(0)
+    pap_labels = np.array(pap_labels)
+    return coords, pap_labels, np.array(pap_areas)
+
+def fibrosis_heterogeneity(filename, masks_dict, save_dir=None):
+
+    """
+    Code to obtain center of mass coords for papilla
+    :return:
+    :rtype:
+    """
+    masks_dict['zones2'][masks_dict['zones3']==True] = True
+    masks_dict['zones1'][masks_dict['zones2']==True] = True
+    labeled_mask, num_labels = get_labeled_papilla(masks_dict)
+    dense = get_pap_data(labeled_mask, generate_wsi_mask(masks_dict, 'zones1'))
+    hyalinized = get_pap_data(labeled_mask, generate_wsi_mask(masks_dict, 'zones2'))
+    mineralized = get_pap_data(labeled_mask, generate_wsi_mask(masks_dict, 'zones3'))
+    processed_coords = {'coords': dense[0], 'p_a': np.array(
+        [np.sum(labeled_mask[j] == (i + 1)) for i, j in enumerate(ndimage.find_objects(labeled_mask))]),
+                        'd_a': dense[2], 'h_a': hyalinized[2], 'm_a': mineralized[2],
+                        'd_p': np.sum(masks_dict['zones1']) / np.sum(masks_dict['zones0']),
+                        'h_p': np.sum(masks_dict['zones2']) / np.sum(masks_dict['zones0']),
+                        'm_p': np.sum(masks_dict['zones3']) / np.sum(masks_dict['zones0']), 'd_lb': dense[1],
+                        'h_lb': hyalinized[1], 'm_lb': mineralized[1],
+                        'filename': str(os.path.basename(filename)[:-32])}
+    return processed_coords, labeled_mask
+
+
+def papilla_specific_prevalence(papilla_masks, prevalence_data, show_fig=True, return_processed_fib_data=False):
+    """
+    Code to calculate prevalence of Biondi bodies or lipid vesicles around different categories of papilla (fibrotic vs
+    non-fibrotic papilla). For now, only works on to look at lipid vesicles and fibrosis.
+    :return:
+    :rtype:
+    """
+    fpout, papmask = fibrosis_heterogeneity(papilla_masks['filename'], papilla_masks)
+    distance, indices = ndimage.distance_transform_edt(papmask == 0, return_indices=True)
+    # TODO: double check factor by which to scale coordinates. For lipid vesicles, it should be 8.
+    cpec_coords = prevalence_data['coords']/8
+    cp_indices = indices[:, cpec_coords[..., 1].astype(int), cpec_coords[..., 0].astype(int)]
+    cp_labels = papmask[cp_indices[0], cp_indices[1]]
+    pap_prev_percent = [np.mean(prevalence_data['predictions'][cp_labels == (i+1)]) for i in range(len(fpout['d_lb']))]
+    # TODO: Need to dynamically specify in dataframe if biondi bodies or lipid vesicles are being looked at.
+    df = pd.DataFrame()
+    df['papilla vesicle percentage'] = np.array(pap_prev_percent)[np.isnan(pap_prev_percent) == False]
+    df['fibrotic?'] = fpout['d_lb'][np.isnan(pap_prev_percent) == False]
+    df['p_a'] = fpout['p_a'][np.isnan(pap_prev_percent) == False]
+    df['d_a'] = fpout['d_a'][np.isnan(pap_prev_percent) == False]
+    df['h_a'] = fpout['h_a'][np.isnan(pap_prev_percent) == False]
+    df['m_a'] = fpout['m_a'][np.isnan(pap_prev_percent) == False]
+    if show_fig:
+        print(papilla_masks['filename'])
+        sns.violinplot(y="papilla vesicle percentage",
+                       x="fibrotic?",
+                       data=df,)
+        plt.show()
+    if return_processed_fib_data:
+        return df, fpout
+    else:
+        return df
