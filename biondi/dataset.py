@@ -3358,7 +3358,7 @@ def fibrosis_heterogeneity(filename, masks_dict, save_dir=None):
                         'h_p': np.sum(masks_dict['zones2']) / np.sum(masks_dict['zones0']),
                         'm_p': np.sum(masks_dict['zones3']) / np.sum(masks_dict['zones0']), 'd_lb': dense[1],
                         'h_lb': hyalinized[1], 'm_lb': mineralized[1],
-                        'filename': str(os.path.basename(filename)[:-32])}
+                        'filename': str(os.path.basename(filename))}
     return processed_coords, labeled_mask
 
 
