@@ -27,7 +27,7 @@ def retinanet_resnet50_3d_legacy(inputs, K, A, filter_ratio=1, n=2, include_fc_l
 
 
 def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=False, shared_weights=False, tahn=False,
-                          lr=2e-4, feature_maps=('c3', 'c4', 'c5')):
+                          lr=2e-4, feature_maps=('c3')):
     """Generates retinanet with resnet backbone. Can specify if classification and regression networks share weights"""
     r_model = resnet50_3d(inputs=inputs['dat'],
                           filter_ratio=filter_ratio,
