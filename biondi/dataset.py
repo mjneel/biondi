@@ -2525,6 +2525,7 @@ class TrainingGenerator(keras.utils.Sequence):
         self.per_channel = per_channel
         self.two_channel = two_channel
         self.validation = validation
+        self.prediction = prediction
         self.flip = flip
         if self.flip:
             # will likely need to update this code when moving to a newer version of TF/Keras

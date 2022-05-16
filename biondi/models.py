@@ -54,7 +54,7 @@ def retinanet_resnet50_3d(inputs, K, A, filter_ratio=1, n=2, include_fc_layer=Fa
     )
     return model
 
-
+# TODO: add model compilation to function
 def resnet50_3d(inputs, filter_ratio=1, n=2, include_fc_layer=False, logits=True, kernal1=(1, 1, 1), kernal3=(1, 3, 3),
                 kernal7=(1, 7, 7), num_layers=None):
     """
