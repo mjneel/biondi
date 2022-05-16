@@ -2513,54 +2513,56 @@ class TrainingGenerator(keras.utils.Sequence):
                  two_channel=False,
                  retinanet=False,
                  validation=False,
-                 augmentation=False,
                  flip=False,
                  rotation=False,
-                 rand_brightness=False,
-                 rand_contrast=False,
-                 simultaneous_aug=False,
-                 b_delta=0.95,
-                 c_factor_min=0.1,
-                 c_factor_max=0.9, ):
+                 contrast=False,
+                 c_factor=0.9,
+                 r_factor=0.4,
+                 prediction=False,):
         self.retinanet = retinanet
         self.batch_size = batch_size
         self.normalize = normalize
         self.per_channel = per_channel
         self.two_channel = two_channel
         self.validation = validation
-        self.augmentation = augmentation
         self.flip = flip
+        if self.flip:
+            # will likely need to update this code when moving to a newer version of TF/Keras
+            self.flipper = keras.layers.experimental.preprocessing.RandomFlip()
         self.rotation = rotation
-        self.rand_brightness = rand_brightness
-        self.rand_contrast = rand_contrast
-        self.simultaneous_aug = simultaneous_aug
-        self.b_delta = b_delta
-        self.c_factor_min = c_factor_min
-        self.c_factor_max = c_factor_max
+        self.r_factor = r_factor
+        if self.rotation:
+            # will likely need to update this code when moving to a newer version of TF/Keras
+            self.rotator = keras.layers.experimental.preprocessing.RandomRotation(self.r_factor)
+        self.contrast = contrast
+        self.c_factor = c_factor
+        if self.contrast:
+            # will likely need to update this code when moving to a newer version of TF/Keras
+            self.contraster = keras.layers.experimental.preprocessing.RandomContrast(self.c_factor)
         if type(data) is str:
             if '.pickle' in data:
                 with open(data, 'rb') as handle:
                     self.data = pickle.load(handle)
             elif '.npy' in data:
                 self.data = np.load(data)
-                if self.data.ndim != 5:
-                    self.data = np.expand_dims(self.data, axis=1)
-                    if self.data.ndim != 5:
+                if self.data.ndim != 4:
+                    self.data = np.squeeze(self.data)
+                    if self.data.ndim != 4:
                         raise ValueError(f"Data ndim is {self.data.ndim}. Data needs to have either 4 or 5 dimensions.")
             else:
-                raise ValueError(
-                    'Warning: Filetype is not recognized. Only ".pickle" and ".npy" filetypes are supported.')
+                raise ValueError('Warning: Filetype is not recognized. Only ".pickle" and ".npy" filetypes are supported.')
         else:
             if self.retinanet:
                 self.data = data
             else:
                 if data.ndim == 5:
-                    self.data = data
+                    self.data = np.squeeze(data)
                 else:
-                    self.data = np.expand_dims(data, axis=1)
+                    self.data = data
         if self.retinanet:
             self.sample_number = len(self.data['dat'])
             self.keys = self.data.keys()
+            self.data['dat'] = np.squeeze(self.data['dat'])
         else:
             self.sample_number = len(self.data)
             if labels is not None:
@@ -2587,108 +2589,35 @@ class TrainingGenerator(keras.utils.Sequence):
             y_batch = {}
             for key in self.keys:
                 if 'dat' in key:
-                    if self.rand_contrast and self.rand_brightness:
-                        if self.simultaneous_aug:
-                            x_batch[key] = random_adjust_brightness(
-                                self.data[key][batch_idx, ..., self.c_idx_start:],
-                                b_delta=self.b_delta,
-                                batch_size=len(batch_idx)
-                            )
-                            x_batch[key] = random_adjust_contrast(
-                                x_batch[key],
-                                c_factor_min=self.c_factor_min,
-                                c_factor_max=self.c_factor_max,
-                                batch_size=len(batch_idx)
-                            )
-                        else:
-                            rand_bools = np.random.choice([False, True], size=self.batch_size)
-                            x_batch[key] = self.data[key][batch_idx, ..., self.c_idx_start:].astype('float32')
-                            for i, j in enumerate(rand_bools):
-                                if j:
-                                    x_batch[key][i:i + 1] = random_adjust_contrast(
-                                        x_batch[key][i:i + 1],
-                                        c_factor_min=self.c_factor_min,
-                                        c_factor_max=self.c_factor_max,
-                                        batch_size=1
-                                    )
-                                else:
-                                    x_batch[key][i:i + 1] = random_adjust_brightness(
-                                        x_batch[key][i:i + 1],
-                                        b_delta=self.b_delta,
-                                        batch_size=1
-                                    )
-                    elif self.rand_brightness:
-                        x_batch[key] = random_adjust_brightness(
-                            self.data[key][batch_idx, ..., self.c_idx_start:],
-                            b_delta=self.b_delta,
-                            batch_size=len(batch_idx)
-                        )
-                    elif self.rand_contrast:
-                        x_batch[key] = random_adjust_contrast(
-                            self.data[key][batch_idx, ..., self.c_idx_start:],
-                            c_factor_min=self.c_factor_min,
-                            c_factor_max=self.c_factor_max,
-                            batch_size=len(batch_idx)
-                        )
-                    else:
-                        x_batch[key] = self.data[key][batch_idx, ..., self.c_idx_start:]
+                    x_batch[key] = self.data[key][batch_idx, ..., self.c_idx_start:]
+                    if self.contrast and not self.validation:
+                        x_batch[key] = self.contraster(x_batch[key]).numpy()
                     if self.normalize:
-                        x_batch[key] = per_sample_tile_normalization(x_batch[key], per_channel=self.per_channel)
+                        x_batch[key] = biondi.dataset.per_sample_tile_normalization(x_batch[key],
+                                                                                    per_channel=self.per_channel)
+                    x_batch[key] = np.expand_dims(x_batch[key], axis=1)
                 elif 'msk' in key:
                     x_batch[key] = self.data[key][batch_idx]
                 else:
                     x_batch[key] = self.data[key][batch_idx]
             return x_batch
         else:
-            if self.rand_contrast and self.rand_brightness:
-                if self.simultaneous_aug:
-                    x_batch = random_adjust_brightness(
-                        self.data[batch_idx, ..., self.c_idx_start:],
-                        b_delta=self.b_delta,
-                        batch_size=len(batch_idx)
-                    )
-                    x_batch = random_adjust_contrast(
-                        x_batch,
-                        c_factor_min=self.c_factor_min,
-                        c_factor_max=self.c_factor_max,
-                        batch_size=len(batch_idx)
-                    )
-                else:
-                    rand_bools = np.random.choice([False, True], size=self.batch_size)
-                    x_batch = self.data[batch_idx, ..., self.c_idx_start:].astype('float32')
-                    for i, j in enumerate(rand_bools):
-                        if j:
-                            x_batch[i:i + 1] = random_adjust_contrast(
-                                x_batch[i:i + 1],
-                                c_factor_min=self.c_factor_min,
-                                c_factor_max=self.c_factor_max,
-                                batch_size=1
-                            )
-                        else:
-                            x_batch[i:i + 1] = random_adjust_brightness(
-                                x_batch[i:i + 1],
-                                b_delta=self.b_delta,
-                                batch_size=1
-                            )
-            elif self.rand_brightness:
-                x_batch = random_adjust_brightness(
-                    self.data[batch_idx, ..., self.c_idx_start:],
-                    b_delta=self.b_delta,
-                    batch_size=len(batch_idx)
-                )
-            elif self.rand_contrast:
-                x_batch = random_adjust_contrast(
-                    self.data[batch_idx, ..., self.c_idx_start:],
-                    c_factor_min=self.c_factor_min,
-                    c_factor_max=self.c_factor_max,
-                    batch_size=len(batch_idx)
-                )
-            else:
-                x_batch = self.data[batch_idx, ..., self.c_idx_start:]
+            x_batch = self.data[batch_idx, ..., self.c_idx_start:]
+            if self.flip and not self.validation:
+                x_batch = self.flipper(x_batch).numpy()
+            if self.rotation and not self.validation:
+                x_batch = self.rotator(x_batch).numpy()
+            if self.contrast and not self.validation:
+                x_batch = self.contraster(x_batch).numpy()
+
             if self.normalize:
-                x_batch = per_sample_tile_normalization(x_batch, per_channel=self.per_channel)
+                x_batch = biondi.dataset.per_sample_tile_normalization(x_batch, per_channel=self.per_channel)
+            x_batch = np.expand_dims(x_batch, axis=1)
             y_batch = self.labels[batch_idx]
-            return x_batch, y_batch
+            if self.prediction:
+                return x_batch
+            else:
+                return x_batch, y_batch
 
     def on_epoch_end(self):
         if self.validation:
