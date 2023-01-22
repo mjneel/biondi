@@ -22,6 +22,7 @@ import pandas as pd
 import biondi.statistics
 import pickle
 import PIL
+from PIL import Image
 import math
 import seaborn as sns
 import sqlite3
@@ -2165,7 +2166,7 @@ class PredictionGenerator(keras.utils.Sequence):
     # TODO: consider removing old parameter
     def __init__(self,
                  WSI,
-                 boundingbox,
+                 boundingbox=None,
                  batch_size=1,
                  im_size=512,
                  downsample=True,
@@ -2187,7 +2188,10 @@ class PredictionGenerator(keras.utils.Sequence):
         if self.retinanet:
             self.tile_count = (self.dim[0] // self.im_size) * (self.dim[1] // self.im_size)
         self.column_num = self.dim[0] // self.im_size
-        self.boundingbox = boundingbox
+        if boundingbox != None:
+            self.boundingbox = boundingbox
+        if boundingbox == None & retinanet == True:
+            raise ValueError( 'Must provide boundingbox object for retinanet-based predictions!')
         self.batch_size = batch_size
         self.downsample = downsample
         self.two_channel = two_channel
@@ -2846,7 +2850,7 @@ def generate_mask_quarterres_v1(pts):
             return masks
 
 
-def generate_mask_quarterres_v2(pts):
+def generate_mask_quarterres_v2(pts, cellmask=False):
     if pts.shape[0] == 0:
         return np.zeros(shape=(1024, 1024), dtype=np.uint8)
     else:
@@ -2854,7 +2858,10 @@ def generate_mask_quarterres_v2(pts):
         unique_tags = np.unique(pts[:, 2])
         for i in unique_tags:
             img = PIL.Image.new('L', (1024, 1024), 0)
-            PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:, 2] == i][:, :2] * 1)], outline=1, fill=1)
+            if cellmask:
+                PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:, 2] == i][:, :2] / 8)], outline=1, fill=1)
+            else:
+                PIL.ImageDraw.Draw(img).polygon([tuple(i) for i in (pts[pts[:, 2] == i][:, :2] * 1)], outline=1, fill=1)
             masks.append(np.array(img))
         if len(masks) == 1:
             # print(masks[0].dtype)
@@ -3294,7 +3301,8 @@ def fibrosis_heterogeneity(filename, masks_dict, save_dir=None):
     return processed_coords, labeled_mask
 
 
-def papilla_specific_prevalence(papilla_masks, prevalence_data, show_fig=True, return_processed_fib_data=False):
+def papilla_specific_prevalence(papilla_masks, prevalence_data, show_fig=True, return_processed_fib_data=False,
+                                coord_scaling_factor=8):
     """
     Code to calculate prevalence of Biondi bodies or lipid vesicles around different categories of papilla (fibrotic vs
     non-fibrotic papilla). For now, only works on to look at lipid vesicles and fibrosis.
@@ -3302,11 +3310,22 @@ def papilla_specific_prevalence(papilla_masks, prevalence_data, show_fig=True, r
     :rtype:
     """
     fpout, papmask = fibrosis_heterogeneity(papilla_masks['filename'], papilla_masks)
+    # indices output show coordinates to nearest 0 value. Because papilla in papmask are labeled as 1 - N, papmask==0 is
+    # used to flip 1/0 (True/False)
     distance, indices = ndimage.distance_transform_edt(papmask == 0, return_indices=True)
-    # TODO: double check factor by which to scale coordinates. For lipid vesicles, it should be 8.
-    cpec_coords = prevalence_data['coords']/8
+    # TODO: double check factor by which to scale coordinates. For lipid vesicles, it should be 8 if coords are at 1:1
+    #  scale. Depending on which version of vesicle prevalence code use, scaling may be a factor of 4.
+    # create down-scaled CPEC coordinates
+    cpec_coords = prevalence_data['coords']/coord_scaling_factor
+    # get coordinates to nearest papilla mask for every CPEC coordinate.
     cp_indices = indices[:, cpec_coords[..., 1].astype(int), cpec_coords[..., 0].astype(int)]
+    # get papilla labels using cp_indices on papmask
+    # TODO: Currently cp_labels points to nearest papilla for each CPEC. However, not all CPECs are located in papilla
+    #  and may be incorrect assign to a papilla that is quite far from it. Need to incorporate distance to filter out
+    #  these CPECs.
     cp_labels = papmask[cp_indices[0], cp_indices[1]]
+    # get pathology prevalence around papilla by using list comprehension to calculate prevalence using only CPECs that
+    # have the same cp_label
     pap_prev_percent = [np.mean(prevalence_data['predictions'][cp_labels == (i+1)]) for i in range(len(fpout['d_lb']))]
     # TODO: Need to dynamically specify in dataframe if biondi bodies or lipid vesicles are being looked at.
     df = pd.DataFrame()
@@ -3350,6 +3369,7 @@ def biondi_prevalence_and_coords_from_hdf5(
                                                            tile_size=1024, downscale_factor=2, quartered=True,
                                                            filter_coords=True,
                                                            remove_blanks=False, )
+    # TODO: need to modify code to allow specifying channels
     h5_dict['dat'] = biondi.dataset.per_sample_tile_normalization(h5_dict['dat'])
     anc = boundingbox.convert_box_to_anc(
         retinanet.predict(
@@ -3488,3 +3508,226 @@ def anc_params(coords, bbox_size, downscale_factor, ouput_tile_size, r_start, c_
         if len(params) != 0:
             params = params[np.all((0 <= params) & (params < ouput_tile_size), axis=1)]
     return params
+
+# TODO: should this be removed?
+def get_retinanet_training_dictionary_from_wsi_v2(wsi_filename, coords, boundingbox, normalize=False,
+                                               bbox_size=128, tile_size=1024, downscale_factor=1):
+    if type(wsi_filename) is str:
+        WSI = openslide.OpenSlide(wsi_filename)
+    else:
+        WSI = wsi_filename
+    image_file = h5py.File(hdf5_filename, 'r')
+    images = image_file['images'][:]
+    if downscale_factor != 1:
+        ds_model = biondi.dataset.downsampling_model(tile_size, downsample_factor=downscale_factor, channels=3)
+        images = ds_model.predict(images).astype('uint8')
+        coords = np.concatenate([coords[:, :1], (coords[:, 1:] / downscale_factor).astype(int)], axis=1)
+    im_out = []
+    bx_out = []
+    for i in range(len(completed_tiles)):
+        if completed_tiles[i, 1] == 1:
+            # coords should be x, y where x is the column number and y is the row number
+            tile_coords = coords[coords[:, 0] == i, 1:]
+            # TODO: add code to automatically calculate quarter split, currently assuming 512x512 before quartering
+            if remove_blanks:
+                if len(tile_coords) == 0:
+                    continue
+            if quartered:
+                # TODO: implement check for annotated cells in each image after quartering
+                q1_coords = tile_coords[(tile_coords[:, 1] < q_size) & (tile_coords[:, 0] < q_size)]
+                q2_coords = tile_coords[(tile_coords[:, 1] < q_size) & (tile_coords[:, 0] >= q_size)]
+                q3_coords = tile_coords[(tile_coords[:, 1] >= q_size) & (tile_coords[:, 0] < q_size)]
+                q4_coords = tile_coords[(tile_coords[:, 1] >= q_size) & (tile_coords[:, 0] >= q_size)]
+                # TODO: add code to automatically calculate output_tile_size, currently assuming 256
+                bx_out.append(anc_params(coords=q1_coords, bbox_size=bbox_size, downscale_factor=downscale_factor,
+                                         ouput_tile_size=q_size, r_start=0, c_start=0, filter_coords=filter_coords))
+                bx_out.append(anc_params(coords=q2_coords, bbox_size=bbox_size, downscale_factor=downscale_factor,
+                                         ouput_tile_size=q_size, r_start=0, c_start=q_size,
+                                         filter_coords=filter_coords))
+                bx_out.append(anc_params(coords=q3_coords, bbox_size=bbox_size, downscale_factor=downscale_factor,
+                                         ouput_tile_size=q_size, r_start=q_size, c_start=0,
+                                         filter_coords=filter_coords))
+                bx_out.append(anc_params(coords=q4_coords, bbox_size=bbox_size, downscale_factor=downscale_factor,
+                                         ouput_tile_size=q_size, r_start=q_size, c_start=q_size,
+                                         filter_coords=filter_coords))
+                im_out.append(images[i, :q_size, :q_size])
+                im_out.append(images[i, :q_size, q_size:])
+                im_out.append(images[i, q_size:, :q_size])
+                im_out.append(images[i, q_size:, q_size:])
+            else:
+                bx_out.append(anc_params(coords=tile_coords, bbox_size=bbox_size, downscale_factor=downscale_factor,
+                                         ouput_tile_size=512, r_start=0, c_start=0, filter_coords=filter_coords))
+                im_out.append(images[i])
+    bx_out = biondi.dataset.convert_anc_to_box_v2_2d(anc_params=bx_out, boundingbox=boundingbox)
+    im_out = np.stack(im_out, axis=0)
+    bx_out['dat'] = im_out
+    for key in bx_out.keys():
+        bx_out[key] = np.expand_dims(bx_out[key], axis=1)
+    image_file.close()
+    return bx_out
+
+
+def anc_params_from_wsi_v2(WSI, coords, bbox_size=128, tile_size=1024, downscale_factor=1, verbose=True):
+    anc_params = []
+    dim = WSI.dimensions
+    grid_height = dim[1] // tile_size
+    grid_width = dim[0] // tile_size
+    max_tiles = grid_width * grid_height
+    scaled_coords = (coords / downscale_factor).astype(int)
+    print('Extracting bounding boxes.')
+    for i in range(max_tiles):
+        tile_bbox_param = []
+        # get coords of image
+        column = i % grid_width
+        row = i // grid_width
+        # pixel range
+        c_start = int(tile_size / downscale_factor) * column
+        c_stop = c_start + int(tile_size / downscale_factor)
+        r_start = int(tile_size / downscale_factor) * row
+        r_stop = r_start + int(tile_size / downscale_factor)
+        # TODO: reconsider print output, message rate will likely be too fast
+        print(f'Extracting bounding boxes: {i + 1} out of {max_tiles}', end='      \r', flush=True)
+        tile_coords = scaled_coords[((c_start <= scaled_coords[:, 0]) & (scaled_coords[:, 0] < c_stop)) & (
+                (r_start <= scaled_coords[:, 1]) & (scaled_coords[:, 1] < r_stop))]
+        x = int((bbox_size / downscale_factor) / 2)
+        y0 = (tile_coords[:, 1] - r_start) - x
+        y1 = (tile_coords[:, 1] - r_start) + x
+        x0 = (tile_coords[:, 0] - c_start) - x
+        x1 = (tile_coords[:, 0] - c_start) + x
+        tile_coords = np.stack([y0, x0, y1, x1], axis=1)
+        if len(tile_coords) != 0:
+            tile_coords = tile_coords[np.all((0 <= tile_coords) & (tile_coords < tile_size), axis=1)]
+            if len(tile_coords) != 0:
+                anc_params.append(tile_coords)
+            else:
+                anc_params.append('None')
+        else:
+            anc_params.append('None')
+    return anc_params
+
+
+def cell_segmentation_hdf5_generation(wsi, coords, samplesize=200, imsize=128, upscale_size=1024, save_path=None):
+    """
+    Generates hdf5 files with images of cells for cell segmentation.
+    :param wsi: WSI filename
+    :type wsi: str
+    :param coords: coordinates of cells
+    :type coords: array
+    :param samplesize: # of images to include
+    :type samplesize: int
+    :param imsize: size of images to extract from the WSI
+    :type imsize: int
+    :param upscale_size: output size of upscaled images
+    :type upscale_size: int
+    :param save_path: save folder path
+    :type save_path: str
+    :return:
+    :rtype:
+    """
+    # get case number from WSI filename
+    wsi_name = re.search('(^.*?) ', os.path.basename(wsi)).group(1)
+    filename = wsi_name + '_cell_sample'
+    if save_path:
+        sp = save_path
+    else:
+        sp = ''
+    full_filename = sp + filename + '.hdf5'
+    # make indices for random sample
+    p = np.random.permutation(len(coords))
+    # randomly select coords
+    rand_coords = coords[p[:samplesize]]
+    # extract images
+    images = wsi_cell_extraction_from_coords_v3(wsi, im_size=imsize, coords=rand_coords, verbose=0)
+    # upscale images
+    images = np.stack([Image.fromarray(i).resize([upscale_size, upscale_size], resample=Image.NEAREST) for i in images])
+    f = h5py.File(full_filename, 'w')
+    f['images'] = images
+    f['coords'] = rand_coords
+    f['wsi_path'] = wsi
+    f.close()
+    print('Saved as:', full_filename)
+
+
+def cell_prediction_from_coords(wsi, classifier, coords, return_predictions=True,):
+    # currently only for BB predictions.
+    # TODO: Add support for lipid vesicle predictions
+    if type(wsi) is str:
+        wsi = openslide.open_slide(wsi)
+    else:
+        wsi = wsi
+    prediction_logits = classifier.predict(
+        PredictionGenerator(wsi, batch_size=32, downsample=False, retinanet=False, coords=coords),
+        verbose=1,
+        workers=12,
+        max_queue_size=128,
+    )
+    predictions = np.argmax(prediction_logits, axis=-1)
+    affected_coords = coords[predictions == 1]
+    prevalence = (len(affected_coords) / len(coords)) * 100
+    if return_predictions:
+        return {'coords': coords,
+                'af_coords': affected_coords,
+                'prevalence': prevalence,
+                'predictions': predictions, }
+    else:
+        return {'coords': coords,
+                'af_coords': affected_coords,
+                'prevalence': prevalence}
+
+
+class AffectedImgen(keras.utils.Sequence):
+    """
+    Extracts images of affected cpecs based on af_coords from biondi prevalence ai output.
+    """
+    def __init__(
+            self,
+            wsi_file_list,
+            data_list,
+            wsi_file_prefix,
+    ):
+        self.wfl = wsi_file_list
+        self.datas = data_list
+        self.fnprefix = wsi_file_prefix
+
+    def __len__(self):
+        return int(len(self.wfl))
+
+    def __getitem__(self, index):
+        return biondi.dataset.wsi_cell_extraction_from_coords_v3(self.fnprefix+self.wfl[index], im_size=44, coords=self.datas[index]['af_coords'], verbose=0)
+
+
+def biondi_load_from_coords(wsi_file_list, coord_data_list, file_name_prefix='', return_table=True):
+    sizes = []
+    gen = AffectedImgen(wsi_file_list, coord_data_list, file_name_prefix)
+    enqueuer = keras.utils.OrderedEnqueuer(gen)
+    enqueuer.start(workers=12, max_queue_size=gen.__len__())
+    datas = enqueuer.get()
+    progbar = keras.utils.Progbar(gen.__len__(), verbose=1)
+    for i in range(gen.__len__()):
+        data = next(datas)
+        histogram = skimage.exposure.histogram(data[...,1])
+        threshold = skimage.filters.threshold_multiotsu(hist=histogram, classes=4)
+        sizes.append(np.sum(data[...,1]>threshold[-1], axis=(1,2)))
+        progbar.add(1)
+    enqueuer.stop()
+    total = np.array([len(i['predictions']) for i in coord_data_list])
+    #poscount = np.array([np.sum(i['predictions']) for i in coord_data_list])
+    sumsizes = np.array([np.sum(i) for i in sizes])
+    avg_load_all_cells = sumsizes/total
+    #avg_load_pos_cells = sumsizes/poscount
+
+    if return_table:
+        df = pd.DataFrame()
+        df['case'] = wsi_file_list
+        df['BB_load_all_cells'] = avg_load_all_cells
+        return sizes, df
+    else:
+        return sizes,
+
+
+def biondi_local_load(affected_cpec_coords, biondi_load_data, radius=310.559):
+    ac = KDTree(affected_cpec_coords)
+    queried_coords = ac.query_radius(affected_cpec_coords, r=radius)
+    avg_load = np.array([np.mean(biondi_load_data[queried_coords[i]]) for i in range(len(queried_coords))])
+    return avg_load
+

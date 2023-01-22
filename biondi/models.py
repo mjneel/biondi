@@ -831,8 +831,8 @@ def unet(inputs, filter_ratio=1, logits_num=2, num_layers=6, class_num=1, _3d=Fa
             expanding_layers.append(e_layer(int(8 * filter_ratio) * j if j != 0 else int(4 * filter_ratio),
                                             int(8 * filter_ratio) * (j + 1),
                                             expanding_layers[-1] + contracting_layers[j + 1]))
-        last_layer = conv1(int(4 * filter_ratio),
-                           conv1(int(4 * filter_ratio), expanding_layers[-1] + contracting_layers[0]))
+    last_layer = conv1(int(4 * filter_ratio),
+                       conv1(int(4 * filter_ratio), expanding_layers[-1] + contracting_layers[0]))
 
     # --- Create logits
     logits = {}
