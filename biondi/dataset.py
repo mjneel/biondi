@@ -2516,13 +2516,15 @@ class TrainingGenerator(keras.utils.Sequence):
                  per_channel=False,
                  two_channel=False,
                  retinanet=False,
+                 resnet_2D=False,
                  validation=False,
                  flip=False,
                  rotation=False,
                  contrast=False,
                  c_factor=0.9,
                  r_factor=0.4,
-                 prediction=False,):
+                 prediction=False,
+                 **kwargs):
         self.retinanet = retinanet
         self.batch_size = batch_size
         self.normalize = normalize
@@ -2530,6 +2532,7 @@ class TrainingGenerator(keras.utils.Sequence):
         self.two_channel = two_channel
         self.validation = validation
         self.prediction = prediction
+        self.resnet_2D = resnet_2D
         self.flip = flip
         if self.flip:
             # will likely need to update this code when moving to a newer version of TF/Keras
@@ -2617,7 +2620,10 @@ class TrainingGenerator(keras.utils.Sequence):
 
             if self.normalize:
                 x_batch = biondi.dataset.per_sample_tile_normalization(x_batch, per_channel=self.per_channel)
-            x_batch = np.expand_dims(x_batch, axis=1)
+            if self.resnet_2D:
+                pass
+            else:
+                x_batch = np.expand_dims(x_batch, axis=1)
             y_batch = self.labels[batch_idx]
             if self.prediction:
                 return x_batch
