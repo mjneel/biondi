@@ -2179,9 +2179,11 @@ class PredictionGenerator(keras.utils.Sequence):
                  two_channel=False,
                  prediction=False,
                  retinanet=False,
+                 resnet_2D=False,
                  coords=None,
                  vesicles=False,
-                 old=False,):
+                 old=False,
+                 low_level=False,):
         if type(WSI) is str:
             self.wsi = openslide.open_slide(WSI)
         else:
@@ -2191,6 +2193,7 @@ class PredictionGenerator(keras.utils.Sequence):
         self.retinanet = retinanet
         if self.retinanet:
             self.tile_count = (self.dim[0] // self.im_size) * (self.dim[1] // self.im_size)
+        self.resnet_2D = resnet_2D
         self.column_num = self.dim[0] // self.im_size
         if boundingbox != None:
             self.boundingbox = boundingbox
@@ -2200,6 +2203,7 @@ class PredictionGenerator(keras.utils.Sequence):
         self.downsample = downsample
         self.two_channel = two_channel
         self.vesicles = vesicles
+        self.low_level = low_level
         if self.vesicles:
             self.dsf = 4
             self.cpec_im_size = 128
@@ -2208,9 +2212,11 @@ class PredictionGenerator(keras.utils.Sequence):
             self.cpec_im_size = 64
         if self.downsample and not self.vesicles:
             if self.two_channel:
-                self.downscale_model = downsampling_model(self.im_size, downsample_factor=self.dsf, channels=2)
+                self.downscale_model = biondi.dataset.downsampling_model(self.im_size, downsample_factor=self.dsf, channels=2)
             else:
-                self.downscale_model = downsampling_model(self.im_size, downsample_factor=self.dsf)
+                self.downscale_model = biondi.dataset.downsampling_model(self.im_size, downsample_factor=self.dsf)
+        if self.vesicles and self.low_level:
+            self.downscale_model = biondi.dataset.downsampling_model(self.im_size, downsample_factor=self.dsf)
         self.normalize = normalize
         self.per_channel = per_channel
         if self.two_channel:
@@ -2235,10 +2241,15 @@ class PredictionGenerator(keras.utils.Sequence):
                 r = idx // self.column_num
                 c = idx % self.column_num
                 if self.vesicles:
-                    batch.append(
-                        np.array(self.wsi.read_region((c * self.im_size, r * self.im_size), 1,
-                                                      (int(self.im_size / self.dsf), int(self.im_size / self.dsf)))
-                                 )[..., self.c_idx_start:-1])
+                    if self.low_level:
+                        batch.append(
+                            np.array(self.wsi.read_region((c * self.im_size, r * self.im_size), 0, (self.im_size, self.im_size))
+                                     )[..., self.c_idx_start:-1])
+                    else:
+                        batch.append(
+                            np.array(self.wsi.read_region((c * self.im_size, r * self.im_size), 1,
+                                                          (int(self.im_size / self.dsf), int(self.im_size / self.dsf)))
+                                     )[..., self.c_idx_start:-1])
                 else:
                     batch.append(
                         np.array(self.wsi.read_region((c * self.im_size, r * self.im_size), 0, (self.im_size, self.im_size))
@@ -2246,8 +2257,10 @@ class PredictionGenerator(keras.utils.Sequence):
             batch = np.stack(batch)
         else:
             batch_idx = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
-            batch = wsi_cell_extraction_from_coords_v3(self.wsi, im_size=self.cpec_im_size, coords=self.coords[batch_idx], verbose=0)
+            batch = biondi.dataset.wsi_cell_extraction_from_coords_v3(self.wsi, im_size=self.cpec_im_size, coords=self.coords[batch_idx], verbose=0)
         if self.downsample and not self.vesicles:
+            batch = self.downscale_model(batch.astype('float32')).numpy()
+        if self.downsample and self.low_level and self.vesicles:
             batch = self.downscale_model(batch.astype('float32')).numpy()
         if self.normalize:
             batch = biondi.dataset.per_sample_tile_normalization(batch, per_channel=self.per_channel)
@@ -2258,7 +2271,10 @@ class PredictionGenerator(keras.utils.Sequence):
                     shape=(len(batch_dict['dat']),) + tuple(self.boundingbox.params['inputs_shapes'][key]))
             return batch_dict
         else:
-            return np.expand_dims(batch, axis=1)
+            if self.resnet_2D:
+                return batch
+            else:
+                return np.expand_dims(batch, axis=1)
 
     def on_epoch_end(self):
         if self.retinanet:
@@ -2520,13 +2536,15 @@ class TrainingGenerator(keras.utils.Sequence):
                  per_channel=False,
                  two_channel=False,
                  retinanet=False,
+                 resnet_2D=False,
                  validation=False,
                  flip=False,
                  rotation=False,
                  contrast=False,
                  c_factor=0.9,
                  r_factor=0.4,
-                 prediction=False,):
+                 prediction=False,
+                 **kwargs):
         self.retinanet = retinanet
         self.batch_size = batch_size
         self.normalize = normalize
@@ -2534,6 +2552,7 @@ class TrainingGenerator(keras.utils.Sequence):
         self.two_channel = two_channel
         self.validation = validation
         self.prediction = prediction
+        self.resnet_2D = resnet_2D
         self.flip = flip
         if self.flip:
             # will likely need to update this code when moving to a newer version of TF/Keras
@@ -2621,7 +2640,10 @@ class TrainingGenerator(keras.utils.Sequence):
 
             if self.normalize:
                 x_batch = biondi.dataset.per_sample_tile_normalization(x_batch, per_channel=self.per_channel)
-            x_batch = np.expand_dims(x_batch, axis=1)
+            if self.resnet_2D:
+                pass
+            else:
+                x_batch = np.expand_dims(x_batch, axis=1)
             y_batch = self.labels[batch_idx]
             if self.prediction:
                 return x_batch
