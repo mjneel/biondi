@@ -878,3 +878,5 @@ class LogisticEndpoint1(keras.layers.Layer):
 
         # Return the inference-time prediction tensor (for `.predict()`).
         return logits
+
+class Resnet
