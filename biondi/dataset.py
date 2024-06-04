@@ -3094,6 +3094,7 @@ class UnetTrainingGenerator(keras.utils.Sequence):
                  batch_size,
                  normalize=True,
                  validation=False,
+                 classes=4,
                  flip=False,
                  rotation=False,
                  contrast=False,
@@ -3102,6 +3103,7 @@ class UnetTrainingGenerator(keras.utils.Sequence):
         self.batch_size = batch_size
         self.normalize = normalize
         self.validation = validation
+        self.classes = classes
         self.flip = flip
         if self.flip:
             # will likely need to update this code when moving to a newer version of TF/Keras
@@ -3206,14 +3208,12 @@ def downsampling3D_model(im_size, downsample_factor=2, channels=3):
     return model
 
 
-def unet_prediction(model, PredictionGenerator, verbose=1, workers=8, max_queue_size=64):
+def unet_prediction(model, PredictionGenerator, verbose=1, workers=8, max_queue_size=64, classes=4):
     tiles = {
         'filename': PredictionGenerator.filename,
-        'zones0': [],
-        'zones1': [],
-        'zones2': [],
-        'zones3': [],
     }
+    for j in range(classes):
+        tiles[f'zones{j}'] = []
     ds_model = downsampling3D_model(512, channels=2)
     enqueuer = keras.utils.OrderedEnqueuer(PredictionGenerator)
     enqueuer.start(workers=workers, max_queue_size=max_queue_size)
