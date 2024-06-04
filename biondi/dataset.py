@@ -3230,12 +3230,12 @@ def unet_prediction(model, PredictionGenerator, verbose=1, workers=8, max_queue_
     return tiles
 
 
-def bulk_unet_prediction(filelist, model, dst_dir, verbose=1, batch_size=8):
+def bulk_unet_prediction(filelist, model, dst_dir, verbose=1, batch_size=8, classes=4):
     for i in filelist:
         print(f'Working on {i}:')
         with open(dst_dir + os.path.basename(i)[:-4] + '_unet_output_dict.pickle', 'wb') as handle:
             pickle.dump(
-                unet_prediction(model, UnetPredictionGenerator(i, batch_size=batch_size, wsi_level=1),
+                unet_prediction(model, UnetPredictionGenerator(i, batch_size=batch_size, wsi_level=1),classes=classes,
                                 verbose=verbose), handle)
 
 
