@@ -3097,13 +3097,11 @@ class UnetTrainingGenerator(keras.utils.Sequence):
                  flip=False,
                  rotation=False,
                  contrast=False,
-                 classes=4,
                  c_factor=0.9,
                  r_factor=0.4, ):
         self.batch_size = batch_size
         self.normalize = normalize
         self.validation = validation
-        self.classes = classes
         self.flip = flip
         if self.flip:
             # will likely need to update this code when moving to a newer version of TF/Keras
@@ -3130,7 +3128,12 @@ class UnetTrainingGenerator(keras.utils.Sequence):
             x_batch = self.flipper(x_batch).numpy()
         if self.rotation and not self.validation:
             x_batch = self.rotator(x_batch).numpy()
-        y_batch = {f'zones{i}': np.expand_dims(x_batch[..., 3+i:4+i], axis=1) for i in range(self.classes)}
+        y_batch = {
+            'zones0': np.expand_dims(x_batch[..., 3:4], axis=1),
+            'zones1': np.expand_dims(x_batch[..., 4:5], axis=1),
+            'zones2': np.expand_dims(x_batch[..., 5:6], axis=1),
+            'zones3': np.expand_dims(x_batch[..., 6:7], axis=1),
+        }
         if self.contrast and not self.validation:
             x_batch = self.contraster(x_batch[..., :3]).numpy()
         else:
