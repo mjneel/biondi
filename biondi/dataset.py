@@ -3128,12 +3128,7 @@ class UnetTrainingGenerator(keras.utils.Sequence):
             x_batch = self.flipper(x_batch).numpy()
         if self.rotation and not self.validation:
             x_batch = self.rotator(x_batch).numpy()
-        y_batch = {
-            'zones0': np.expand_dims(x_batch[..., 3:4], axis=1),
-            'zones1': np.expand_dims(x_batch[..., 4:5], axis=1),
-            'zones2': np.expand_dims(x_batch[..., 5:6], axis=1),
-            'zones3': np.expand_dims(x_batch[..., 6:7], axis=1),
-        }
+        y_batch = {f'zones{i}': np.expand_dims(x_batch[..., 3 + i:4 + i], axis=1) for i in range(self.classes)}
         if self.contrast and not self.validation:
             x_batch = self.contraster(x_batch[..., :3]).numpy()
         else:

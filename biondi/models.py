@@ -844,7 +844,7 @@ def unet(inputs, filter_ratio=1, logits_num=2, num_layers=6, class_num=1, _3d=Fa
     if compile:
         model.compile(
             optimizer=optimizers.Adam(learning_rate=lr),
-            loss_weights={i: keras.losses.SparseCategoricalCrossentropy(from_logits=True) for i in model.output_names},
+            loss={i: keras.losses.SparseCategoricalCrossentropy(from_logits=True) for i in model.output_names},
             metrics={i: custom.dsc(cls=1) for i in model.output_names},
             # TODO: Check if leaving this parameter out affects model training.
             experimental_run_tf_function=False,
