@@ -2,6 +2,7 @@ import os
 import glob
 import re
 import numpy as np
+import sklearn.model_selection
 from skimage import io
 import skimage
 import skimage.morphology
@@ -26,6 +27,9 @@ from PIL import Image
 import math
 import seaborn as sns
 import sqlite3
+import keras_tuner as kt
+from keras_tuner.engine import tuner_utils
+import copy
 
 def load_tif(tif_file):
     # TODO: adjust code to load channels last regardles of skimage or imageio version
@@ -3750,3 +3754,91 @@ def biondi_local_load(affected_cpec_coords, biondi_load_data, radius=310.559):
     avg_load = np.array([np.mean(biondi_load_data[queried_coords[i]]) for i in range(len(queried_coords))])
     return avg_load
 
+
+class BayesianOptimizationCV(kt.BayesianOptimization):
+    def helper_fn(self, data, labels, **kwargs):
+        kf = sklearn.model_selection.KFold(n_splits=self.executions_per_trial, shuffle=True)
+        kfgen = kf.split(X=data)
+        return kf, kfgen, data, labels
+
+
+    def run_trial(self, trial, *args, **kwargs):
+        model_checkpoint = tuner_utils.SaveBestEpoch(
+            objective=self.oracle.objective,
+            filepath=self._get_checkpoint_fname(trial.trial_id),
+        )
+        original_callbacks = kwargs.pop("callbacks", [])
+
+        # Run the training process multiple times.
+        histories = []
+        kf, kfgen, data, labels = self.helper_fn(*args)
+
+        for execution in range(self.executions_per_trial):
+            copied_kwargs = copy.copy(kwargs)
+            callbacks = self._deepcopy_callbacks(original_callbacks)
+            self._configure_tensorboard_dir(callbacks, trial, execution)
+            callbacks.append(tuner_utils.TunerCallback(self, trial))
+            # Only checkpoint the best epoch across all executions.
+            callbacks.append(model_checkpoint)
+            copied_kwargs["callbacks"] = callbacks
+            train_idx, test_idx = next(kfgen)
+            tgen = TrainingGenerator(data=data[train_idx],
+                                     labels=labels[train_idx],
+                                     batch_size=64,
+                                     flip=True,
+                                     rotation=True,
+                                     contrast=True,
+                                     **kwargs)
+            vgen = TrainingGenerator(data=data[test_idx],
+                                     labels=labels[test_idx],
+                                     batch_size=64,
+                                     validation=True,
+                                     **kwargs)
+            obj_value = self._build_and_fit_model(trial, x=tgen, validation_data=vgen, **copied_kwargs)
+
+            histories.append(obj_value)
+        return histories
+
+
+class NestedCV_HPoptimization():
+    def __init__(self, training_data, training_labels, input_shape, hypermodel=kt.applications.HyperResNet, out_k=10,
+                 in_k=5, search_alg=biondi.dataset.BayesianOptimizationCV, classes=2, max_trials=100,
+                 objective='val_loss', project_name=None, directory=None, epochs=1):
+        self.data = training_data
+        self.labels = training_labels
+        self.hypermodel = hypermodel
+        self.outer_k = out_k
+        self.inner_k = in_k
+        self.search_alg = search_alg
+        self.input_shape = input_shape
+        self.classes = classes
+        self.max_trials = max_trials
+        self.outer_kfold = sklearn.model_selection.KFold(n_splits=self.outer_k, shuffle=True)
+        self.outer_results = []
+        self.objective = objective
+        self.project_name = project_name
+        self.directory = directory
+        self.epochs = epochs
+
+    def hptuner(self, fold):
+        tuner = self.search_alg(
+            self.hypermodel(input_shape=self.input_shape, classes=self.classes),
+            objective=self.objective,
+            max_trials=self.max_trials,
+            executions_per_trial=self.inner_k,
+            project_name=f'{self.project_name} fold_{fold}',
+            directory=self.directory,)
+        return tuner
+
+    def outer_loop(self):
+        kfgen = self.outer_kfold.split(X=self.data, y=self.labels)
+        for i in range(self.outer_k):
+            train, test = next(kfgen)
+            tuner = self.hptuner(i)
+            tuner.search(self.data[train], self.labels[train], workers=16, max_queue_size=128, epochs=self.epochs)
+            bestmodel = tuner.get_best_models(num_models=1)[0]
+            vgen = TrainingGenerator(data=self.data[test],
+                                     labels=self.labels[test],
+                                     batch_size=64,
+                                     validation=True,)
+            self.outer_results.append(bestmodel.evaluate(x=vgen, workers=16, max_queue_size=10))
